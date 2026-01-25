@@ -1,0 +1,4 @@
+[submodule "extern/controllers"]
+	path = extern/controllers
+	url = https://gitlab.com/trasgo-group-valladolid/controllers.git
+	branch = master

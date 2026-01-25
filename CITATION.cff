@@ -1,0 +1,46 @@
+cff-version: 1.2.0
+message: "If you use EPSILOD in your research in any meaningful way, we would appreciate that you cite it as follows:"
+authors:
+- given-names: 'Manuel'
+  family-names: 'de Castro'
+  orcid: 'https://orcid.org/0000−0003−3080−5136'
+- given-names: 'Inmaculada'
+  family-names: 'Santamaría Valenzuela'
+  orcid: 'https://orcid.org/0000-0002-7497-8795'
+- given-names: 'Yuri'
+  family-names: 'Torres'
+  orcid: 'https://orcid.org/0000−0002−3037−3567'
+- given-names: 'Arturo'
+  family-names: 'Gonzalez-Escribano'
+  orcid: 'https://orcid.org/0000−0003−1309−9321'
+- given-names: 'Diego R.'
+  family-names: 'Llanos'
+  orcid: 'https://orcid.org/0000-0001-6240-9109'
+title: "EPSILOD: Efficient Parallel Skeleton for Generic Iterative Stencil Computations in Distributed Heterogeneous Systems"
+date-released: 2023-01-14
+url: 'https://gitlab.com/trasgo-group-valladolid/epsilod'
+preferred-citation:
+  type: article
+  authors:
+  - given-names: 'Manuel'
+    family-names: 'de Castro'
+    orcid: 'https://orcid.org/0000−0003−3080−5136'
+  - given-names: 'Inmaculada'
+    family-names: 'Santamaría Valenzuela'
+    orcid: 'https://orcid.org/0000-0002-7497-8795'
+  - given-names: 'Yuri'
+    family-names: 'Torres'
+    orcid: 'https://orcid.org/0000−0002−3037−3567'
+  - given-names: 'Arturo'
+    family-names: 'Gonzalez-Escribano'
+    orcid: 'https://orcid.org/0000−0003−1309−9321'
+  - given-names: 'Diego R.'
+    family-names: 'Llanos'
+    orcid: 'https://orcid.org/0000-0001-6240-9109'
+  doi: '10.1007/s11227-022-05040-y'
+  journal: "The Journal of Supercomputing"
+  month: 1
+  title: "EPSILOD: efficient parallel skeleton for generic iterative stencil computations in distributed GPUs"
+  year: 2023
+  pages: "9409-9442"
+  volume: "79"

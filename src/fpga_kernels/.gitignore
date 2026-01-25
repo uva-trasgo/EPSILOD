@@ -1,0 +1,4 @@
+# Directories for compiled kernels:
+float/
+double/
+cell_t/
