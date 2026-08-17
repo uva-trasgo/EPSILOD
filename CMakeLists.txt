@@ -357,6 +357,9 @@ function(add_epsilod_version type include)
 		epsilod_${type}
 		OBJECT
 		${CMAKE_SOURCE_DIR}/src/epsilod_structs.c
+		${CMAKE_SOURCE_DIR}/src/epsilod_env.c
+		${CMAKE_SOURCE_DIR}/src/epsilod_io.c
+		${CMAKE_SOURCE_DIR}/src/epsilod_log.c
 		${CMAKE_SOURCE_DIR}/src/epsilod.c
 		${CMAKE_SOURCE_DIR}/src/epsilod_alb.c
 		${CMAKE_SOURCE_DIR}/src/epsilod_alb_heuristics.c

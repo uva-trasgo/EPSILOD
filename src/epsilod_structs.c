@@ -7,7 +7,10 @@
  */
 
 #include "epsilod_structs.h"
-#include <ctype.h>
+#include "epsilod_env.h"
+#include "epsilod_log.h"
+
+HitTile(EPSILOD_BASE_TYPE) EPSILOD_TILE_NULL = HIT_TILE_NULL_STATIC;
 
 /**
  * @brief Transform border coordinates in flat border number
@@ -53,7 +56,10 @@ int compare_comm_tiles(const void *a, const void *b) {
  * @return A Ctrl_Thread with the corresponding number of threads for each dimension.
  */
 Ctrl_Thread init_thread_from_tile(HitTile(EPSILOD_BASE_TYPE) * p_tile) {
-	Ctrl_Thread tile_threads;
+	if (hit_tileIsNull(*p_tile))
+		return CTRL_THREAD_NULL;
+
+	Ctrl_Thread tile_threads = CTRL_THREAD_NULL;
 	switch (hit_tileDims(*p_tile)) {
 		case 1:
 			Ctrl_ThreadInit(tile_threads,
@@ -64,11 +70,17 @@ Ctrl_Thread init_thread_from_tile(HitTile(EPSILOD_BASE_TYPE) * p_tile) {
 							hit_tileDimCard(*p_tile, 0),
 							hit_tileDimCard(*p_tile, 1));
 			break;
-		default:
+		case 3:
 			Ctrl_ThreadInit(tile_threads,
 							hit_tileDimCard(*p_tile, 0),
 							hit_tileDimCard(*p_tile, 1),
 							hit_tileDimCard(*p_tile, 2));
+			break;
+		case 4:
+			Ctrl_ThreadInit(tile_threads,
+							hit_tileDimCard(*p_tile, 1),
+							hit_tileDimCard(*p_tile, 2),
+							hit_tileDimCard(*p_tile, 3));
 			break;
 	}
 	return tile_threads;
@@ -159,7 +171,10 @@ HitTile(EPSILOD_BASE_TYPE) create_tile_mat(PCtrl comm, HitTile(EPSILOD_BASE_TYPE
 		shp_expanded = hit_shapeTransform(shp_expanded, i, HIT_SHAPE_END, borders.high[i]);
 	}
 	HitTile(EPSILOD_BASE_TYPE) mat = Ctrl_Select(EPSILOD_BASE_TYPE, *global_mat, shp_expanded, CTRL_SELECT_ARR_COORD);
-	Ctrl_Alloc(comm, mat);
+	if (epsilod_align() == EPSILOD_MEM_ALIGN_NONE)
+		Ctrl_Alloc(comm, mat);
+	else
+		Ctrl_Alloc(comm, mat, CTRL_MEM_ALIGNED);
 	return mat;
 }
 
@@ -192,6 +207,33 @@ HitTile(EPSILOD_BASE_TYPE) create_tile_inner(HitTile(EPSILOD_BASE_TYPE) * mat, H
 }
 
 /**
+ * @brief Creates a tile used when computing the inner area of the local tile. The inner area excludes inbound halos and outbound borders.
+ * The actual shape depends on Epsilod's memory alignment model of the local tile.
+ * If the memory alignment mode is EPSILOD_MEM_ALIGN_THREADS, the generated tile's last dimension is extended to the beginning.
+ * Otherwise, the tile is virtually the same as the inner tile.
+ * @param mat The local tile.
+ * @param inner The inner region tile.
+ * @return A tile to compute the inner part of the local tile.
+ */
+HitTile(EPSILOD_BASE_TYPE) create_tile_inner_compute(HitTile(EPSILOD_BASE_TYPE) * mat, HitTile(EPSILOD_BASE_TYPE) * inner) {
+
+	if (epsilod_align() != EPSILOD_MEM_ALIGN_THREADS || hit_tileDims(*mat) == 1)
+		return *inner;
+
+	HitShape shp_mat   = mat->shape;
+	HitShape shp_inner = inner->shape;
+
+	int    last_dim = hit_shapeDims(shp_inner) - 1;
+	HitInd inner_last_dim_offset =
+		hit_shapeSig(shp_inner, last_dim).begin -
+		hit_shapeSig(shp_mat, last_dim).begin;
+
+	shp_inner = hit_shapeTransform(shp_inner, last_dim, HIT_SHAPE_BEGIN, -inner_last_dim_offset);
+
+	return Ctrl_Select(EPSILOD_BASE_TYPE, *mat, shp_inner, CTRL_SELECT_ARR_COORD);
+}
+
+/**
  * @brief Creates a tile to perform IO operations.
  * It spans the local part of the domain partition including global matrix borders but excluding inbound halos.
  *
@@ -217,21 +259,21 @@ HitTile(EPSILOD_BASE_TYPE) create_tile_io(HitTile(EPSILOD_BASE_TYPE) * mat, HitT
 }
 
 /**
- * @brief Creates a tile spanning an inbound halo.
+ * @brief Creates a shape spanning an inbound halo.
  * This defines data in the local tile to be received from other processes.
  *
- * @param p_mat The local tile.
  * @param shp_lay The layout shape.
  * @param active Whether the halo is active.
  * @param borders Border sizes.
  * @param shift_in Displacement to halo's neighbor.
- * @return A tile spanning an inbound halo.
+ * @return A shape spanning an inbound halo.
  */
-HitTile(EPSILOD_BASE_TYPE) create_tile_borderin(HitTile(EPSILOD_BASE_TYPE) * p_mat, HitShape shp_lay, bool active, EpsilodBorders borders, HitRanks shift_in) {
-	// Non-active borders, null tiles
-	if (!active) return *(HitTile(EPSILOD_BASE_TYPE) *)&HIT_TILE_NULL;
-	HitShape shp_border_in = shp_lay;
+HitShape create_shape_borderin(HitShape shp_lay, bool active, EpsilodBorders borders, HitRanks shift_in) {
+	// Non-active borders, null shape
+	if (!active)
+		return HIT_SHAPE_NULL;
 
+	HitShape shp_border_in = shp_lay;
 	// Extract ranks for this border
 	for (int j = 0; j < hit_shapeDims(shp_lay); j++) {
 		if (shift_in.rank[j] == -1) {
@@ -242,26 +284,25 @@ HitTile(EPSILOD_BASE_TYPE) create_tile_borderin(HitTile(EPSILOD_BASE_TYPE) * p_m
 			shp_border_in = hit_shapeTransform(shp_border_in, j, HIT_SHAPE_MOVE, borders.high[j]);
 		}
 	}
-	HitTile(EPSILOD_BASE_TYPE) tmp = Ctrl_Select(EPSILOD_BASE_TYPE, *p_mat, shp_border_in, CTRL_SELECT_ARR_COORD);
-	return tmp;
+	return shp_border_in;
 }
 
 /**
- * @brief Creates a tile spanning an outbound border.
+ * @brief Creates a shape spanning an outbound border.
  * This defines data in the local tile to be sent to other processes.
  *
- * @param p_mat The local tile.
  * @param shp_lay The layout shape.
  * @param active Whether the border is active.
  * @param borders Border sizes.
  * @param shift_in Displacement to halo's neighbor.
- * @return A tile spanning an outbound border.
+ * @return A shape spanning an outbound border.
  */
-HitTile(EPSILOD_BASE_TYPE) create_tile_borderout(HitTile(EPSILOD_BASE_TYPE) * p_mat, HitShape shp_lay, bool active, EpsilodBorders borders, HitRanks shift_in) {
-	// Non-active borders, null tiles
-	if (!active) return *(HitTile(EPSILOD_BASE_TYPE) *)&HIT_TILE_NULL;
-	HitShape shp_border_out = shp_lay;
+HitShape create_shape_borderout(HitShape shp_lay, bool active, EpsilodBorders borders, HitRanks shift_in) {
+	// Non-active borders, null shape
+	if (!active)
+		return HIT_SHAPE_NULL;
 
+	HitShape shp_border_out = shp_lay;
 	// Extract ranks for this border
 	for (int j = 0; j < hit_shapeDims(shp_lay); j++) {
 		if (shift_in.rank[j] == -1) {
@@ -270,7 +311,25 @@ HitTile(EPSILOD_BASE_TYPE) create_tile_borderout(HitTile(EPSILOD_BASE_TYPE) * p_
 			shp_border_out = hit_shapeTransform(shp_border_out, j, HIT_SHAPE_FIRST, borders.high[j]);
 		}
 	}
-	return Ctrl_Select(EPSILOD_BASE_TYPE, *p_mat, shp_border_out, CTRL_SELECT_ARR_COORD);
+	return shp_border_out;
+}
+
+/**
+ * @brief Creates a tile spanning an inbound halo or an outbound border.
+ *
+ * @see See create_shape_borderin(), create_shape_borderout()
+ *
+ * @param p_mat The local tile.
+ * @param shp_border The border shape.
+ * @param active Whether the border is active.
+ * @return A tile spanning a border.
+ */
+HitTile(EPSILOD_BASE_TYPE) create_tile_border(HitTile(EPSILOD_BASE_TYPE) * p_mat, HitShape shp_border, bool active) {
+	// Non-active borders, null tiles
+	if (!active)
+		return EPSILOD_TILE_NULL;
+
+	return Ctrl_Select(EPSILOD_BASE_TYPE, *p_mat, shp_border, CTRL_SELECT_ARR_COORD);
 }
 
 /**
@@ -290,9 +349,173 @@ void create_tile_borderoutdev(EpsilodTiles *p_tiles, HitLayout lay, bool *p_bord
 			if (validShape(shp_border_outdev[i][j])) {
 				p_tiles->border_out_dev[i][j] = Ctrl_Select(EPSILOD_BASE_TYPE, p_tiles->mat, shp_border_outdev[i][j], CTRL_SELECT_ARR_COORD);
 			} else {
-				p_tiles->border_out_dev[i][j] = *(HitTile(EPSILOD_BASE_TYPE) *)&HIT_TILE_NULL;
+				p_tiles->border_out_dev[i][j] = EPSILOD_TILE_NULL;
 			}
 		}
+	}
+}
+
+/**
+ * Creates and allocates a new empty tile with the same shape as the original tile.
+ * If the original is a null tile, it returns a null tile.
+ * @param comm Pointer to the EPSILOD Controller.
+ * @param tile The original tile.
+ * @return The new copy tile or a null tile.
+ */
+HitTile(EPSILOD_BASE_TYPE) create_tile_copy(PCtrl comm, HitTile(EPSILOD_BASE_TYPE) tile) {
+	if (hit_tileIsNull(tile))
+		return EPSILOD_TILE_NULL;
+	return Ctrl_DomainAlloc(comm, EPSILOD_BASE_TYPE, tile.shape);
+}
+
+/**
+ * @brief Merge inbound border tiles to minimize the number of buffers while keeping buffer contiguity.
+ * Two tiles should be adjacent to be expressed as selections of a larger buffer.
+ * A tile can be expressed as a selection of another while keeping data contiguity if their last n-1 dimensions match.
+ *
+ * @param dims
+ * @param shp_border
+ * @param shp_border_expanded
+ * @param merged_indexes
+ */
+void calc_borderin_merge(int dims, HitShape *shp_border, HitShape *shp_border_expanded, int *merged_indexes) {
+	int  num_borders = epsilod_num_borders(dims);
+	int *p_merge_dim = malloc(sizeof(int) * num_borders);
+	for (int i = 0; i < num_borders; i++) {
+		merged_indexes[i]      = i;
+		shp_border_expanded[i] = shp_border[i];
+		p_merge_dim[i]         = -1;
+		if (hit_shapeCmp(shp_border[i], HIT_SHAPE_NULL))
+			continue;
+		// Brute force
+		for (int j = 0; j < num_borders; j++) {
+			if (i == j)
+				continue;
+			// Check if shp_border[i] is adjacent to shp_border[j]
+			for (int adj_d = 0; adj_d < dims; adj_d++) {
+				bool is_adj = true;
+				for (int d = 0; d < dims; d++) {
+					HitSig sig_a = hit_shapeSig(shp_border[i], d);
+					HitSig sig_b = hit_shapeSig(shp_border[j], d);
+					if (d == adj_d) {
+						// Checking adjacency dim
+						if (!(sig_a.begin - sig_a.stride == sig_b.end ||
+							  sig_a.end + sig_a.stride == sig_b.begin)) {
+							is_adj = false;
+							break;
+						}
+					} else {
+						// Checking the other dims
+						if (sig_a.begin != sig_b.begin ||
+							sig_a.end != sig_b.end) {
+							is_adj = false;
+							break;
+						}
+					}
+				}
+				if (is_adj) {
+					// Only merge tiles to bigger tiles
+					if (hit_shapeCard(shp_border[i]) >= hit_shapeCard(shp_border[j]))
+						continue;
+					bool keep_contiguity = true;
+					// Check if last n-1 dim cards match
+					for (int d = 1; d < dims; d++) {
+						if (hit_shapeSigCard(shp_border[i], d) != hit_shapeSigCard(shp_border[j], d)) {
+							keep_contiguity = false;
+							break;
+						}
+					}
+					if (keep_contiguity) {
+						merged_indexes[i] = j;
+						p_merge_dim[i]    = adj_d;
+
+						// A tile may only be merged once
+						break;
+					}
+				}
+			}
+		}
+	}
+
+	for (int i = 0; i < num_borders; i++) {
+		int to_idx = merged_indexes[i];
+		if (to_idx == i)
+			continue;
+
+		int transform_dim = p_merge_dim[i];
+		// Expand the shape
+		HitSig sig_a = hit_shapeSig(shp_border[i], transform_dim);
+		HitSig sig_b = hit_shapeSig(shp_border[to_idx], transform_dim);
+		int    action, dir;
+		if (sig_a.end < sig_b.begin) {
+			action = HIT_SHAPE_BEGIN;
+			dir    = -1;
+		} else {
+			action = HIT_SHAPE_END;
+			dir    = 1;
+		}
+		shp_border_expanded[to_idx] = hit_shapeTransform(shp_border_expanded[to_idx], transform_dim, action, dir * hit_shapeSigCard(shp_border[i], transform_dim));
+
+		shp_border_expanded[i] = HIT_SHAPE_NULL;
+	}
+	free(p_merge_dim);
+}
+
+/**
+ * @brief Merge outbound border tiles to minimize data duplication while keeping buffer contiguity.
+ * A tile should be contained in another to be expressed as a selection.
+ * A tile can be expressed as a selection of another while keeping data contiguity if their last n-1 dimensions match.
+ *
+ * @param dims
+ * @param shp_border
+ * @param merged_indexes
+ */
+void calc_borderout_merge(int dims, HitShape *shp_border, int *merged_indexes) {
+	int num_borders = epsilod_num_borders(dims);
+
+	// Initialize
+	for (int i = 0; i < num_borders; i++) {
+		merged_indexes[i] = i;
+	}
+
+	for (int i = 0; i < num_borders; i++) {
+		if (hit_shapeCmp(shp_border[i], HIT_SHAPE_NULL))
+			continue;
+		// Brute force
+		for (int j = 0; j < num_borders; j++) {
+			// Skip current border or borders that already merge to another
+			// This prevents index loops
+			if (i == j || merged_indexes[j] != j)
+				continue;
+			// Check if shp_border[i] is contained in shp_border[j]
+			HitShape shp_int = hit_shapeIntersect(shp_border[i], shp_border[j]);
+			if (hit_shapeCmp(shp_border[i], shp_int)) {
+				bool keep_contiguity = true;
+				// Check if last n-1 dim cards match
+				for (int d = 1; d < dims; d++) {
+					if (hit_shapeSigCard(shp_border[i], d) != hit_shapeSigCard(shp_border[j], d)) {
+						keep_contiguity = false;
+						break;
+					}
+				}
+				if (keep_contiguity) {
+					merged_indexes[i] = j;
+					// A tile may only be merged once
+					break;
+				}
+			}
+		}
+	}
+
+	// Avoid chained indexes
+	for (int i = 0; i < num_borders; i++) {
+		int idx;
+		int idx_aux = i;
+		do {
+			idx     = idx_aux;
+			idx_aux = merged_indexes[idx];
+		} while (idx != idx_aux);
+		merged_indexes[i] = idx;
 	}
 }
 
@@ -317,62 +540,36 @@ EpsilodCoords build_coords(HitTile(EPSILOD_BASE_TYPE) tile, EpsilodBorders borde
 	return coords;
 }
 
-void freeEpsilodTiles(EpsilodTiles *p_tiles) {
+void free_epsilod_tiles(EpsilodTiles *p_tiles) {
 	int dims = hit_tileDims(p_tiles->mat);
 	Ctrl_Free(NULL, p_tiles->mat, p_tiles->inner, p_tiles->io);
+	if (epsilod_align() == EPSILOD_MEM_ALIGN_THREADS && dims > 1) {
+		Ctrl_Free(NULL, p_tiles->inner_compute);
+	}
 
 	for (int i = 0; i < epsilod_num_borders(dims); i++) {
 		Ctrl_Free(NULL, p_tiles->border_in[i], p_tiles->border_out[i]);
+		if (comms_contiguous_buffers()) {
+			Ctrl_Free(NULL, p_tiles->cont_border_in[i], p_tiles->cont_border_out[i]);
+			Ctrl_Free(NULL, p_tiles->comms_border_in[i], p_tiles->comms_border_out[i]);
+		}
 	}
 	for (int i = 0; i < dims; i++) {
 		Ctrl_Free(NULL, p_tiles->border_out_dev[i][0], p_tiles->border_out_dev[i][1]);
 	}
 	hit_patternFree(&(p_tiles->neighSync));
 
+	if (comms_contiguous_buffers()) {
+		free(p_tiles->cont_border_in);
+		free(p_tiles->cont_border_out);
+	}
 	free(p_tiles->border_in);
 	free(p_tiles->border_out);
+	free(p_tiles->comms_border_in);
+	free(p_tiles->comms_border_out);
 	free(p_tiles->border_out_dev);
 
 	free(p_tiles);
-}
-
-void print_all(const char *format, ...) {
-	if (epsilod_exp_mode())
-		return;
-	va_list args;
-	va_start(args, format);
-	vprintf(format, args);
-	va_end(args);
-}
-
-void print_once(const char *format, ...) {
-	if (epsilod_exp_mode())
-		return;
-	if (hit_Rank == 0) {
-		va_list args;
-		va_start(args, format);
-		vprintf(format, args);
-		va_end(args);
-	}
-}
-
-void print_gather(char *buffer, size_t buffer_size, const char *separator) {
-	char *buffer_all   = (char *)malloc(hit_NProcs * buffer_size * sizeof(char));
-	char *p_buffer_all = buffer_all;
-	// TODO @davdiez use Hitmap functions (currently this operation not implemented in Hitmap)
-	MPI_Gather(buffer, buffer_size, MPI_CHAR,
-			   buffer_all, buffer_size, MPI_CHAR,
-			   0, hit_Comm);
-
-	if (hit_Rank == 0) {
-		printf("\n");
-		for (int i = 0; i < hit_NProcs; i++) {
-			printf("%s%s", p_buffer_all, separator);
-			p_buffer_all += buffer_size;
-		}
-		fflush(stdout);
-	}
-	free(buffer_all);
 }
 
 /**
@@ -455,7 +652,8 @@ void set_shifts(EpsilodCommArgs comm_args, HitLayout lay) {
 
 		// TODO @davdiez Review: HIT_RANKS_NULL makes "null" HitRanks valid shifts, though they are not used
 		// Non-active borders, null ranks
-		if (!comm_args.border_in_active[i]) continue;
+		if (!comm_args.border_in_active[i])
+			continue;
 
 		// Extract ranks for this border
 		int digits = i;
@@ -477,7 +675,8 @@ void deactivate_empty_neighbors(bool *p_border_active, HitLayout lay, HitRanks *
 
 	for (int i = 0; i < epsilod_num_borders(hit_layNumDims(lay)); i++) {
 		// Skip empty borders
-		if (!p_border_active[i]) continue;
+		if (!p_border_active[i])
+			continue;
 
 		// Deactivate borders without neighbor
 		HitRanks neigh = hit_layNeighborN(lay, shifts[i]);
@@ -503,20 +702,66 @@ EpsilodTiles *create_tiles(PCtrl comm, HitLayout lay, HitTile(EPSILOD_BASE_TYPE)
 	bool         *p_border_out_active = comm_args.border_out_active;
 	HitRanks     *shifts_in           = comm_args.shifts_in;
 
-	p_tiles->mat   = create_tile_mat(comm, global_mat, lay.shape, borders);
-	p_tiles->inner = create_tile_inner(&p_tiles->mat, lay, p_border_out_active, borders);
-	p_tiles->io    = create_tile_io(&p_tiles->mat, *global_mat, borders);
+	p_tiles->mat           = create_tile_mat(comm, global_mat, lay.shape, borders);
+	p_tiles->inner         = create_tile_inner(&p_tiles->mat, lay, p_border_out_active, borders);
+	p_tiles->inner_compute = create_tile_inner_compute(&p_tiles->mat, &p_tiles->inner);
+	p_tiles->io            = create_tile_io(&p_tiles->mat, *global_mat, borders);
+
+	HitShape *p_shp_border_in  = malloc(sizeof(HitShape) * num_borders);
+	HitShape *p_shp_border_out = malloc(sizeof(HitShape) * num_borders);
+	for (int i = 0; i < num_borders; i++) {
+		p_shp_border_in[i]  = create_shape_borderin(lay.shape, p_border_in_active[i], borders, shifts_in[i]);
+		p_shp_border_out[i] = create_shape_borderout(lay.shape, p_border_out_active[i], borders, shifts_in[i]);
+	}
+
+	bool contiguous = comms_contiguous_buffers();
+
+	int      *border_in_merge_to       = malloc(sizeof(int) * num_borders);
+	HitShape *p_shp_border_in_expanded = malloc(sizeof(HitShape) * num_borders);
+	int      *border_out_merge_to      = malloc(sizeof(int) * num_borders);
+	if (contiguous) {
+		calc_borderin_merge(dims, p_shp_border_in, p_shp_border_in_expanded, border_in_merge_to);
+		calc_borderout_merge(dims, p_shp_border_out, border_out_merge_to);
+	}
 
 	p_tiles->border_in  = malloc(sizeof(HitTile(EPSILOD_BASE_TYPE)) * num_borders);
 	p_tiles->border_out = malloc(sizeof(HitTile(EPSILOD_BASE_TYPE)) * num_borders);
 	for (int i = 0; i < num_borders; i++) {
-		p_tiles->border_in[i]  = create_tile_borderin(&p_tiles->mat, lay.shape, p_border_in_active[i], borders, shifts_in[i]);
-		p_tiles->border_out[i] = create_tile_borderout(&p_tiles->mat, lay.shape, p_border_out_active[i], borders, shifts_in[i]);
+		p_tiles->border_in[i]  = create_tile_border(&p_tiles->mat, contiguous ? p_shp_border_in_expanded[i] : p_shp_border_in[i], p_border_in_active[i] && (!contiguous || border_in_merge_to[i] == i));
+		p_tiles->border_out[i] = create_tile_border(&p_tiles->mat, p_shp_border_out[i], p_border_out_active[i] && (!contiguous || border_out_merge_to[i] == i));
+	}
+
+	// Tiles used as contiguous buffers
+	if (contiguous) {
+		p_tiles->cont_border_in  = malloc(sizeof(HitTile(EPSILOD_BASE_TYPE)) * num_borders);
+		p_tiles->cont_border_out = malloc(sizeof(HitTile(EPSILOD_BASE_TYPE)) * num_borders);
+		for (int i = 0; i < num_borders; i++) {
+			p_tiles->cont_border_in[i]  = create_tile_copy(comm, p_tiles->border_in[i]);
+			p_tiles->cont_border_out[i] = create_tile_copy(comm, p_tiles->border_out[i]);
+		}
 	}
 
 	// TODO @seralpa consider making fn build only one tile
 	p_tiles->border_out_dev = malloc(sizeof(HitTile(EPSILOD_BASE_TYPE)) * dims * 2);
 	create_tile_borderoutdev(p_tiles, lay, p_border_out_active, borders);
+
+	// Tiles used in communications
+	p_tiles->comms_border_in  = malloc(sizeof(HitTile(EPSILOD_BASE_TYPE)) * num_borders);
+	p_tiles->comms_border_out = malloc(sizeof(HitTile(EPSILOD_BASE_TYPE)) * num_borders);
+	for (int i = 0; i < num_borders; i++) {
+		if (contiguous) {
+			p_tiles->comms_border_in[i]  = Ctrl_Select(EPSILOD_BASE_TYPE, p_tiles->cont_border_in[border_in_merge_to[i]], p_shp_border_in[i], CTRL_SELECT_ARR_COORD);
+			p_tiles->comms_border_out[i] = Ctrl_Select(EPSILOD_BASE_TYPE, p_tiles->cont_border_out[border_out_merge_to[i]], p_shp_border_out[i], CTRL_SELECT_ARR_COORD);
+		} else {
+			p_tiles->comms_border_in[i]  = p_tiles->border_in[i];
+			p_tiles->comms_border_out[i] = p_tiles->border_out[i];
+		}
+	}
+
+	free(p_shp_border_in);
+	free(p_shp_border_in_expanded);
+	free(p_shp_border_out);
+
 	return p_tiles;
 }
 
@@ -540,15 +785,15 @@ HitPattern create_comm_pattern(PCtrl comm, EpsilodTiles *p_tiles, EpsilodCommArg
 	for (int j = 0, i = sorted_comm_indexes[j].index; j < num_borders; i = sorted_comm_indexes[++j].index) {
 
 		// If both neighbors do not exist, skip adding comms
-		if (!(border_in_active[i]) && !border_out_active[i])
+		if (!border_in_active[i] && !border_out_active[i])
 			continue;
 
 		// Use CUDA/HIP MPI aware
 		if (mpi_dev_aware()) {
 			if (border_in_active[i])
-				(p_tiles->border_in[i]).data = Ctrl_GetDevPtr(comm, p_tiles->border_in[i]);
+				(p_tiles->comms_border_in[i]).data = Ctrl_GetDevPtr(comm, p_tiles->comms_border_in[i]);
 			if (border_out_active[i])
-				(p_tiles->border_out[i]).data = Ctrl_GetDevPtr(comm, p_tiles->border_out[i]);
+				(p_tiles->comms_border_out[i]).data = Ctrl_GetDevPtr(comm, p_tiles->comms_border_out[i]);
 		}
 
 		// Locate neighbors in the layout grid
@@ -560,7 +805,7 @@ HitPattern create_comm_pattern(PCtrl comm, EpsilodTiles *p_tiles, EpsilodCommArg
 			neigh_out = hit_layNeighborN(lay, comm_args.shifts_out[i]);
 
 		// Add comms to the patterns
-		hit_patternAdd(&pattern, hit_comSendRecv(lay, neigh_out, &(p_tiles->border_out[i]), neigh_in, &(p_tiles->border_in[i]), HIT_CELL));
+		hit_patternAdd(&pattern, hit_comSendRecv(lay, neigh_out, &(p_tiles->comms_border_out[i]), neigh_in, &(p_tiles->comms_border_in[i]), HIT_CELL));
 
 		// Annotate the index of the border in the pattern
 		comm_args.index_comm_border[indexCommBorderCount++] = i;
@@ -568,40 +813,22 @@ HitPattern create_comm_pattern(PCtrl comm, EpsilodTiles *p_tiles, EpsilodCommArg
 	return pattern;
 }
 
-bool mpi_dev_aware() {
-	// Read env: use CUDA/HIP MPI aware
-	static int mpi_dev_aware = -1;
-	if (mpi_dev_aware != -1) return mpi_dev_aware;
-
-	mpi_dev_aware = hit_envNoYes("EPSILOD_MPI_DEV_AWARE");
-	print_once("Epsilod Using Device-Aware MPI: %c\n", (mpi_dev_aware) ? 'y' : 'n');
-	if (mpi_dev_aware)
-		print_once(BOLD_TEXT "NOTE:" REGULAR_TEXT "Device-Aware MPI only works if it is suported and activated in the MPI layer\n");
-	return mpi_dev_aware;
-}
-
-bool epsilod_exp_mode() {
-	static int val = -1;
-	if (val != -1)
-		return val;
-
-	val = hit_envNoYes("CTRL_EXAMPLES_EXP_MODE");
-	return val;
-}
-
-bool epsilod_debug_tiles() {
-	static int val = -1;
-	if (val != -1)
-		return val;
-
-	val = hit_envNoYes("EPSILOD_DEBUG_TILES");
-	return val;
-}
-
 EpsilodGlobalCoords get_global_coords(EpsilodTiles tiles, EpsilodBorders borders) {
 	EpsilodGlobalCoords g_coords = {0};
 	g_coords.mat                 = build_coords(tiles.mat, borders);
 	g_coords.inner               = build_coords(tiles.inner, borders);
+
+	if (epsilod_align() == EPSILOD_MEM_ALIGN_THREADS && hit_tileDims(tiles.mat) > 1) {
+		HitShape shp_mat   = tiles.mat.shape;
+		HitShape shp_inner = tiles.inner.shape;
+		int      last_dim  = hit_shapeDims(shp_inner) - 1;
+		HitInd   inner_last_dim_offset =
+			hit_shapeSig(shp_inner, last_dim).begin -
+			hit_shapeSig(shp_mat, last_dim).begin;
+		g_coords.inner.inner_last_dim_offset = inner_last_dim_offset;
+	} else {
+		g_coords.inner.inner_last_dim_offset = 0;
+	}
 
 	for (int i = 0; i < hit_tileDims(tiles.mat); i++)
 		for (int j = 0; j < 2; j++)
@@ -612,17 +839,65 @@ EpsilodGlobalCoords get_global_coords(EpsilodTiles tiles, EpsilodBorders borders
 EpsilodThreads get_threads(EpsilodTiles tiles) {
 	EpsilodThreads threads = {0};
 	threads.mat            = init_thread_from_tile(&tiles.mat);
-	threads.inner          = init_thread_from_tile(&tiles.inner);
+	threads.inner          = init_thread_from_tile(&tiles.inner_compute);
 	threads.flat           = (Ctrl_Thread){.dims = 1, .i = tiles.mat.acumCard, .j = 1, .k = 1};
 	threads.touch          = (Ctrl_Thread){.dims = 1, .i = 1, .j = 0, .k = 0};
 
 	for (int i = 0; i < hit_tileDims(tiles.mat); i++)
 		for (int j = 0; j < 2; j++)
 			threads.border_out_dev[i][j] = init_thread_from_tile(&tiles.border_out_dev[i][j]);
+
+	if (comms_contiguous_buffers()) {
+		int num_borders         = epsilod_num_borders(hit_tileDims(tiles.mat));
+		threads.cont_border_in  = malloc(sizeof(Ctrl_Thread) * num_borders);
+		threads.cont_border_out = malloc(sizeof(Ctrl_Thread) * num_borders);
+		for (int i = 0; i < num_borders; i++) {
+			if (!hit_tileIsNull(tiles.cont_border_in[i]))
+				threads.cont_border_in[i] = init_thread_from_tile(&tiles.cont_border_in[i]);
+			if (!hit_tileIsNull(tiles.cont_border_out[i]))
+				threads.cont_border_out[i] = init_thread_from_tile(&tiles.cont_border_out[i]);
+		}
+	}
+
 	return threads;
 }
 
-EpsilodThreads get_chars(int dims, Ctrl_Type ctrl_type) {
+/**
+ * @brief Retrieve a block suitable for computations where each device thread accesses only a single element.
+ * The shape of the involved tile/s is used to assess suitable block dimensions.
+ * Assigns bigger cardinalities to higher dimensions where possible.
+ * @param shape The shape of the tiles that will be used
+ * @return The block dimensions
+ */
+Ctrl_Thread get_char_from_shape(HitShape shape) {
+	int MAX_BLOCK_CARD = 256;
+	int dims           = hit_shapeDims(shape);
+	int char_dims      = (dims > 3) ? 3 : dims;
+	int acum_card      = 1;
+	int block[3]       = {1, 1, 1};
+	for (int dim = dims - 1, b = 0; dim >= dims - char_dims; dim--, b++) {
+		// Powers of 2 from 256 down
+		for (int i = 8; i >= 0; i--) {
+			int size = (int)powf(2, i);
+			if (hit_shapeSigCard(shape, dim) >= size && acum_card * size <= MAX_BLOCK_CARD) {
+				block[b] = size;
+				acum_card *= size;
+				break;
+			}
+		}
+	}
+
+	switch (dims) {
+		case 1:
+			return (Ctrl_Thread){.dims = char_dims, .i = block[0], .j = 1, .k = 1};
+		case 2:
+			return (Ctrl_Thread){.dims = char_dims, .i = block[1], .j = block[0], .k = 1};
+		default:
+			return (Ctrl_Thread){.dims = char_dims, .i = block[2], .j = block[1], .k = block[0]};
+	}
+}
+
+EpsilodThreads get_chars(int dims, Ctrl_Type ctrl_type, EpsilodTiles tiles) {
 	/* A. Kernel characterizations */
 	Ctrl_Thread char_inner[3] = {
 		{.dims = 1, .i = 256, .j = 1, .k = 1},
@@ -673,163 +948,21 @@ EpsilodThreads get_chars(int dims, Ctrl_Type ctrl_type) {
 	chars.flat  = (Ctrl_Thread){.dims = 1, .i = 256, .j = 1, .k = 1};
 	chars.touch = (Ctrl_Thread){.dims = 1, .i = 1, .j = 1, .k = 1};
 
-	for (int i = 0; i < char_dims; i++)
+	for (int i = 0; i < dims; i++)
 		for (int j = 0; j < 2; j++)
-			chars.border_out_dev[i][j] = is_cpu ? char_cpu_border[char_dims - 1][i] : char_border[char_dims - 1][i];
+			chars.border_out_dev[i][j] = is_cpu ? char_cpu_border[char_dims - 1][(dims > 2) ? 2 : i] : char_border[char_dims - 1][(dims > 2) ? 2 : i];
+
+	if (comms_contiguous_buffers()) {
+		int num_borders       = epsilod_num_borders(dims);
+		chars.cont_border_in  = malloc(sizeof(Ctrl_Thread) * num_borders);
+		chars.cont_border_out = malloc(sizeof(Ctrl_Thread) * num_borders);
+		for (int i = 0; i < num_borders; i++) {
+			if (!hit_tileIsNull(tiles.cont_border_in[i]))
+				chars.cont_border_in[i] = get_char_from_shape(tiles.cont_border_in[i].shape);
+			if (!hit_tileIsNull(tiles.cont_border_out[i]))
+				chars.cont_border_out[i] = get_char_from_shape(tiles.cont_border_out[i].shape);
+		}
+	}
+
 	return chars;
-}
-
-int shape_to_str(char *buff, HitShape sh) {
-	char *p_start_buffer = buff;
-	buff += sprintf(buff, "[%ld:%ld:%ld",
-					hit_shapeSig(sh, 0).begin, hit_shapeSig(sh, 0).end, hit_shapeSig(sh, 0).stride);
-	for (int i = 1; i < hit_shapeDims(sh); i++)
-		buff += sprintf(buff, ",%ld:%ld:%ld",
-						hit_shapeSig(sh, i).begin, hit_shapeSig(sh, i).end, hit_shapeSig(sh, i).stride);
-	buff += sprintf(buff, "] \t cards: [%ld", hit_sigCard(hit_shapeSig(sh, 0)));
-	for (int i = 1; i < hit_shapeDims(sh); i++)
-		buff += sprintf(buff, ",%ld", hit_sigCard(hit_shapeSig(sh, i)));
-	buff += sprintf(buff, "]");
-	return buff - p_start_buffer;
-}
-
-int tile_to_str(char *buffer, HitTile(EPSILOD_BASE_TYPE) * p_tile) {
-	char *p_buffer       = buffer;
-	char *p_start_buffer = buffer;
-	p_buffer += sprintf(p_buffer, "tile ptr %p, parent %p, data %p\n  ", p_tile, p_tile->ref, p_tile->data);
-	p_buffer += shape_to_str(p_buffer, p_tile->shape);
-	p_buffer += sprintf(p_buffer, "\n");
-	return p_buffer - p_start_buffer;
-}
-
-void dump_tiles(EpsilodTiles *p_tiles) {
-	size_t buff_sz  = 100 * 1024;
-	char  *buffer   = (char *)malloc(buff_sz * sizeof(char));
-	char  *p_buffer = buffer;
-	int    dims     = hit_tileDims(p_tiles->mat);
-
-	p_buffer += sprintf(p_buffer, "[%d] Mat:\n  ", hit_Rank);
-	p_buffer += tile_to_str(p_buffer, &p_tiles->mat);
-
-	p_buffer += sprintf(p_buffer, "[%d] Inner:\n  ", hit_Rank);
-	p_buffer += tile_to_str(p_buffer, &p_tiles->inner);
-
-	p_buffer += sprintf(p_buffer, "[%d] IO:\n  ", hit_Rank);
-	p_buffer += tile_to_str(p_buffer, &p_tiles->io);
-
-	for (int i = 0; i < dims; i++) {
-		for (int j = 0; j < 2; j++) {
-			p_buffer += sprintf(p_buffer, "[%d] BorderOutDev %s dim %d:\n  ", hit_Rank, j ? "high" : "low", i);
-			if (validShape(p_tiles->border_out_dev[i][j].shape))
-				p_buffer += tile_to_str(p_buffer, &p_tiles->border_out_dev[i][j]);
-			else
-				p_buffer += sprintf(p_buffer, "None\n");
-		}
-	}
-	for (int i = 0; i < epsilod_num_borders(dims); i++) {
-		p_buffer += sprintf(p_buffer, "[%d] Border IN (%d):\n  ", hit_Rank, i);
-		if (validShape(p_tiles->border_in[i].shape))
-			p_buffer += tile_to_str(p_buffer, &p_tiles->border_in[i]);
-		else
-			p_buffer += sprintf(p_buffer, "None\n");
-
-		p_buffer += sprintf(p_buffer, "[%d] Border OUT (%d):\n  ", hit_Rank, i);
-		if (validShape(p_tiles->border_out[i].shape))
-			p_buffer += tile_to_str(p_buffer, &p_tiles->border_out[i]);
-		else
-			p_buffer += sprintf(p_buffer, "None\n");
-	}
-
-	print_gather(buffer, buff_sz, "\n");
-	free(buffer);
-}
-
-void dump_coords(EpsilodCoords coords) {
-	printf("\tDims: %d\n", coords.dims);
-	for (int i = 0; i < coords.dims; i++) {
-		printf("\t\tSize[%d] %ld\n", i, coords.size[i]);
-		printf("\t\tOffset[%d] %ld\n", i, coords.offset[i]);
-	}
-	printf("\tBorders:\n");
-	for (int i = 0; i < EPSILOD_MAX_DIMS; i++) {
-		printf("\t\tHigh[%d] %d\n", i, coords.borders.high[i]);
-		printf("\t\tLow[%d] %d\n", i, coords.borders.low[i]);
-	}
-	fflush(stdout);
-}
-
-void dump_global_coords(EpsilodGlobalCoords g_coords) {
-	printf("Mat:\n");
-	fflush(stdout);
-	dump_coords(g_coords.mat);
-	printf("Inner:\n");
-	fflush(stdout);
-	dump_coords(g_coords.inner);
-
-	for (int i = 0; i < g_coords.mat.dims; i++)
-		for (int j = 0; j < 2; j++) {
-			printf("Border Out Dev [%d] %s:\n", i, j ? "high" : "low");
-			fflush(stdout);
-			dump_coords(g_coords.border_out_dev[i][j]);
-		}
-}
-
-int get_partition_dim(int dims, const char *partition_str, int start) {
-	const char *part_arg = &partition_str[1];
-	char       *err;
-	int         dim = (int)strtol(part_arg, &err, 10);
-	if (err == part_arg || dim < start || dim > dims - 1 + start) {
-		fprintf(stderr, "\nError in EPSILOD_PARTITION enviroment string: Dimension should be in the range [%d:%d]. String: %s \n\n", start, dims - 1 + start, partition_str);
-		MPI_Abort(MPI_COMM_WORLD, MPI_ERR_OTHER);
-		exit(EXIT_FAILURE);
-	}
-	return dim;
-}
-
-PartitionInfo get_partition_info(int dims) {
-	PartitionInfo info = {
-		.type = EPSILOD_PARTITION_MULTI_DIM,
-		.dims = dims,
-		.dim  = -1};
-	char *partition_str = getenv("EPSILOD_PARTITION");
-	if (partition_str != NULL) {
-		if (strlen(partition_str) > 2) {
-			fprintf(stderr, "\nError in EPSILOD_PARTITION enviroment string: More than two characters. String: %s\n\n", partition_str);
-			MPI_Abort(MPI_COMM_WORLD, MPI_ERR_OTHER);
-			exit(EXIT_FAILURE);
-		}
-		switch (tolower(partition_str[0])) {
-			/* Multidim partition */
-			case 'm':
-				info.type = EPSILOD_PARTITION_MULTI_DIM;
-				// Number of dimensiones in the partition, default all
-				if (partition_str[1] != '\0') {
-					info.dims = get_partition_dim(dims, partition_str, 1);
-				}
-				break;
-			/* Weighted partition in a single dimension */
-			case 'w':
-				info.type = EPSILOD_PARTITION_WEIGHTED;
-				info.dims = 1;
-				info.dim  = get_partition_dim(dims, partition_str, 0);
-				break;
-			/* Regular partition in a single dimension */
-			case 's':
-				info.type = EPSILOD_PARTITION_SINGLE_DIM;
-				info.dims = 1;
-				info.dim  = get_partition_dim(dims, partition_str, 0);
-				break;
-			/* Regular partition in all dimension except one */
-			case 'n':
-				info.type = EPSILOD_PARTITION_NOT_DIM;
-				info.dims = dims - 1;
-				info.dim  = get_partition_dim(dims, partition_str, 0);
-				break;
-			default:
-				fprintf(stderr, "\nError in EPSILOD_PARTITION enviroment string: Unknown partition type. String: %s\n\n", partition_str);
-				MPI_Abort(MPI_COMM_WORLD, MPI_ERR_OTHER);
-				exit(EXIT_FAILURE);
-		}
-	}
-	return info;
 }

@@ -7,6 +7,8 @@
  */
 
 #include "epsilod_alb_heuristics.h"
+#include "epsilod_env.h"
+#include "epsilod_log.h"
 #include <math.h>
 
 /**
@@ -282,7 +284,7 @@ Heuristic epsilod_get_heuristic() {
 	// Check if partition is w, max dims is passed as it's only used for error checking irrelevant for this
 	PartitionInfo part_info = get_partition_info(EPSILOD_MAX_DIMS);
 	if (part_info.type != EPSILOD_PARTITION_WEIGHTED && heur_idx != 0) {
-		print_once("Warning: ALB heuristic %s was selected but the partition is not weighted. Only weighted (w) partitions may use ALB. Disabling ALB");
+		print_once("Warning: ALB heuristic %s was selected but the partition is not weighted. Only weighted (w) partitions may use ALB. Disabling ALB.\n", options[heur_idx]);
 		heur_idx = 0;
 	}
 

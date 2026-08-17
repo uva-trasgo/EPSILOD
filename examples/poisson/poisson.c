@@ -13,9 +13,6 @@
 #include <poisson_ext_type.h>
 #include <epsilod.h>
 
-char *input_file_name;
-char *output_file_name;
-
 vec2l size;
 int   iterations;
 
@@ -50,25 +47,6 @@ void initData(HitTile(EPSILOD_BASE_TYPE) tileMat, EpsilodCoords global, Epsilod_
 		}
 }
 
-/* B. WRITE RESULTS */
-void outputData(HitTile(EPSILOD_BASE_TYPE) io_tile, Epsilod_ext *ext_params) {
-
-	if (strcmp(output_file_name, "-") == 0) {
-		printf("Example not writing output.\n");
-		fflush(stdout);
-		return;
-	}
-
-	char o_f_name[1024];
-	sprintf(o_f_name, "%s_%ld_%ld_%d", output_file_name, size.x, size.y, iterations);
-	output_file_name = o_f_name;
-
-	/* Write distributed file */
-	// var, fileNamePrefix, fileNameSuffix, fileRank, format, coord, header, datatype, formatSize1, formatSize2
-	// hit_tileFileWriteOptions(&io_tile, output_file_name, "", HIT_FILE_RUNTIME, HIT_FILE_TEXT, HIT_FILE_ARRAY, HIT_FILE_NO_HEADER, HIT_FILE_FLOAT, 12, 8);
-	hit_tileFileWriteOptions(&io_tile, output_file_name, NULL, HIT_FILE_RUNTIME, HIT_FILE_BINARY, HIT_FILE_ARRAY, HIT_FILE_NO_HEADER, HIT_FILE_TYPE_UNKNOWN, 1, 0);
-}
-
 /* D. DECLARATIONS OF OPTIMIZED STENCIL KERNEL
  * SEE poisson_kernel.c FILE */
 REGISTER_STENCIL(updateCell_poisson, GENERIC, DEFAULT);
@@ -78,7 +56,7 @@ REGISTER_STENCIL(noop_poisson, GENERIC, DEFAULT);
 void printUsage(char *argv[]) {
 	if (hit_Rank == 0) {
 		fprintf(stderr, "\n=== EPSILOD EXAMPLE: Poisson ===\n");
-		fprintf(stderr, "\nUsage: %s <size_x> <size_y> <numIterations> <input_file> <output_file> <device_selection_file>\n", argv[0]);
+		fprintf(stderr, "\nUsage: %s <size_i> <size_j> <numIterations> <device_selection_file>\n", argv[0]);
 		fprintf(stderr, "\n");
 	}
 }
@@ -89,7 +67,7 @@ int main(int argc, char *argv[]) {
 	Ctrl_Init(&argc, &argv);
 
 	/* Check program arguments number */
-	if (argc != 7) {
+	if (argc != 5) {
 		printUsage(argv);
 		exit(EXIT_FAILURE);
 	}
@@ -98,9 +76,7 @@ int main(int argc, char *argv[]) {
 	size.x                      = atol(argv[1]);
 	size.y                      = atol(argv[2]);
 	iterations                  = atoi(argv[3]);
-	input_file_name             = argv[4];
-	output_file_name            = argv[5];
-	char *device_selection_file = argv[6];
+	char *device_selection_file = argv[4];
 
 	/* STENCIL DECLARATION */
 	/* RADIUS */
@@ -129,7 +105,7 @@ int main(int argc, char *argv[]) {
 		(xmax - xmin) / (size.x - 1),
 		(ymax - ymin) / (size.y - 1),
 	};
-	stencilComputation(sizes, shp_stencil_poisson, stencilData_poisson, 1.0f, iterations, initData, NULL, NULL, f_stencil, outputData, &ext_params, device_selection_file);
+	stencilComputation(sizes, shp_stencil_poisson, stencilData_poisson, 1.0f, iterations, initData, NULL, NULL, f_stencil, NULL, &ext_params, device_selection_file);
 
 	/* END */
 	Ctrl_Finalize();

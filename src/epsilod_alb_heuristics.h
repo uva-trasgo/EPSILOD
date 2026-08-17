@@ -1,5 +1,3 @@
-#ifndef _EPSILOD_HEURISTICS_ALB_
-#define _EPSILOD_HEURISTICS_ALB_
 /**
  * @file epsilod_alb_heuristics.h
  * @brief Prototypes for ALB Heuristics functions and structs for ALB Heuristics internal state.
@@ -7,6 +5,9 @@
  * @copyright This software is part of the EPSILOD project by Trasgo Group, UVa.
  * The relevant license, warranty and copyright notice is available in the EPSILOD project repository.
  */
+
+#ifndef _EPSILOD_HEURISTICS_ALB_
+#define _EPSILOD_HEURISTICS_ALB_
 
 #include "epsilod_structs.h"
 #include <unistd.h>

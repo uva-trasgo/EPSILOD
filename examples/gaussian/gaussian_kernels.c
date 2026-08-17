@@ -32,7 +32,7 @@
 #endif // M_PI
 
 /* KERNEL GENERIC: GAUSSIAN BLUR */
-CTRL_KERNEL(updateCell_gaussian, GENERIC, DEFAULT, KHitTile(EPSILOD_BASE_TYPE) matrix, const KHitTile(EPSILOD_BASE_TYPE) matrixCopy, EpsilodCoords global_coords, KHitTile_float stencil, float factor, const Epsilod_ext ext_params, {
+EPSILOD_KERNEL(updateCell_gaussian, GENERIC, DEFAULT, KHitTile(EPSILOD_BASE_TYPE) matrix, const KHitTile(EPSILOD_BASE_TYPE) matrixCopy, EpsilodCoords global_coords, KHitTile_float stencil, float factor, const Epsilod_ext ext_params, {
 	int x = thr_i;
 	int y = thr_j;
 

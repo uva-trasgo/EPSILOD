@@ -1,5 +1,3 @@
-#ifndef _EPSILOD_TYPES_H_
-#define _EPSILOD_TYPES_H_
 /**
  * @file epsilod_types.h
  * @brief Default type declarations for epsilod
@@ -10,6 +8,9 @@
  * @copyright This software is part of the EPSILOD project by Trasgo Group, UVa.
  * The relevant license, warranty and copyright notice is available in the EPSILOD project repository.
  */
+
+#ifndef _EPSILOD_TYPES_H_
+#define _EPSILOD_TYPES_H_
 
 /* Default stencil base type */
 #ifndef EPSILOD_BASE_TYPE
@@ -65,6 +66,7 @@
 		int            dims;                     \
 		HitInd         size[EPSILOD_MAX_DIMS];   \
 		HitInd         offset[EPSILOD_MAX_DIMS]; \
+		HitInd         inner_last_dim_offset;    \
 		EpsilodBorders borders;                  \
 	} EpsilodCoords;
 #endif // !CTRL_USER_TYPES

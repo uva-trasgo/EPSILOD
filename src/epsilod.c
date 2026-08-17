@@ -9,7 +9,8 @@
 #include <stdio.h>
 
 #include "epsilod.h"
-#include "../../examples/Utils/ctrl_print_info.h"
+#include "epsilod_env.h"
+#include "epsilod_log.h"
 
 /* B. Generic kernel prototype and wrapper launchers */
 #if EPSILOD_IS_FLOAT(EPSILOD_BASE_TYPE)
@@ -103,7 +104,13 @@ CTRL_KERNEL_PROTO(epsilod_dev_copy_3d, 2,
 				  IN, HitTile(EPSILOD_BASE_TYPE), matrix,
 				  OUT, HitTile(EPSILOD_BASE_TYPE), matrix_out);
 
-// TODO epsilod_dev_copy_4d
+CTRL_KERNEL_CHAR(epsilod_dev_copy_4d, MANUAL, 0, 0, 0);
+CTRL_KERNEL_PROTO(epsilod_dev_copy_4d, 2,
+				  GENERIC, DEFAULT,
+				  FPGA, NDRANGE,
+				  2,
+				  IN, HitTile(EPSILOD_BASE_TYPE), matrix,
+				  OUT, HitTile(EPSILOD_BASE_TYPE), matrix_out);
 
 /* D. False initialization of selections to avoid non-initialized warnings */
 CTRL_KERNEL_CHAR(epsilod_dev_touch, MANUAL, 0, 0, 0);
@@ -215,18 +222,112 @@ void markTiles(PCtrl comm, Ctrl_Thread threads_touch, Ctrl_Thread blocksize_touc
 		}
 	}
 	if (validShape(tiles->inner.shape)) {
-		Ctrl_Launch(comm, epsilod_dev_touch, threads_touch, blocksize_touch, tiles->inner);
-		Ctrl_Launch(comm, epsilod_dev_touch, threads_touch, blocksize_touch, copy_tiles->inner);
+		Ctrl_Launch(comm, epsilod_dev_touch, threads_touch, blocksize_touch, tiles->inner_compute);
+		Ctrl_Launch(comm, epsilod_dev_touch, threads_touch, blocksize_touch, copy_tiles->inner_compute);
 	}
 	for (int i = 0; i < epsilod_num_borders(dims); i++) {
-		// Skip empty borders
-		if (!comm_args->border_in_active[i]) continue;
-		Ctrl_Launch(comm, epsilod_dev_touch, threads_touch, blocksize_touch, tiles->border_in[i]);
+		if (!hit_tileIsNull(tiles->border_in[i]))
+			Ctrl_Launch(comm, epsilod_dev_touch, threads_touch, blocksize_touch, tiles->border_in[i]);
+		if (!hit_tileIsNull(tiles->comms_border_in[i])) {
+			Ctrl_HostTask(epsilod_host_touch, tiles->comms_border_in[i]);
+			Ctrl_HostTask(epsilod_host_touch, copy_tiles->comms_border_in[i]);
+		}
+		if (comms_contiguous_buffers()) {
+			if (!hit_tileIsNull(tiles->cont_border_in[i])) {
+				Ctrl_Launch(comm, epsilod_dev_touch, threads_touch, blocksize_touch, tiles->cont_border_in[i]);
+				Ctrl_Launch(comm, epsilod_dev_touch, threads_touch, blocksize_touch, copy_tiles->cont_border_in[i]);
+			}
+			if (!hit_tileIsNull(tiles->cont_border_out[i])) {
+				Ctrl_Launch(comm, epsilod_dev_touch, threads_touch, blocksize_touch, tiles->cont_border_out[i]);
+				Ctrl_Launch(comm, epsilod_dev_touch, threads_touch, blocksize_touch, copy_tiles->cont_border_out[i]);
+			}
+		}
+		if (!hit_tileIsNull(tiles->border_out[i])) {
+			Ctrl_Launch(comm, epsilod_dev_touch, threads_touch, blocksize_touch, tiles->border_out[i]);
+			Ctrl_Launch(comm, epsilod_dev_touch, threads_touch, blocksize_touch, copy_tiles->border_out[i]);
+		}
 	}
 }
 
-typedef void (*CommsFunction)(PCtrl, EpsilodTiles *, EpsilodCommArgs *);
+/**
+ * @brief Get device information of EPSILOD's controller.
+ * \n
+ * The first invocation queries information from the device,
+ * so it should not be used in performance critical operations.
+ * The information is statically cached for subsequuent queries.
+ * @return Device information
+ */
+Ctrl_Info *get_ctrl_info() {
+	static Ctrl_Info  ctrl_info;
+	static Ctrl_Info *p_ctrl_info = NULL;
+
+	if (p_ctrl_info != NULL)
+		return p_ctrl_info;
+
+	ctrl_info   = Ctrl_GetInfo(Ctrl_Get(0));
+	p_ctrl_info = &ctrl_info;
+	return p_ctrl_info;
+}
+
+typedef void (*CommsFunction)(PCtrl, EpsilodTiles *, EpsilodCommArgs *, EpsilodThreads, EpsilodThreads);
 typedef void (*CommsInnerFunction)(PCtrl, EpsilodTiles *, EpsilodCommArgs *);
+
+/**
+ * @brief Transfer data from one tile to another using a compute kernel.
+ * Input and output tiles must have the same shape.
+ * @param comm Controller pointer
+ * @param tile_src Input tile
+ * @param tile_dst Output tile
+ * @param thread Kernel thread space
+ * @param block Kernel blocksize
+ * @param stream Kernel stream number
+ */
+void transfer_tile(PCtrl comm, HitTile(EPSILOD_BASE_TYPE) tile_src, HitTile(EPSILOD_BASE_TYPE) tile_dst, Ctrl_Thread thread, Ctrl_Thread block, int stream) {
+
+	if (!hit_shapeCmp(tile_src.shape, tile_dst.shape)) {
+		fprintf(stderr, "\nError: Tried to transfer tiles with no matching shapes.\n\n");
+		MPI_Abort(MPI_COMM_WORLD, MPI_ERR_OTHER);
+		exit(EXIT_FAILURE);
+	}
+
+	int dims = hit_tileDims(tile_src);
+	switch (dims) {
+		case 1: Ctrl_LaunchToStream(comm, epsilod_dev_copy_1d, thread, block, stream, tile_src, tile_dst); break;
+		case 2: Ctrl_LaunchToStream(comm, epsilod_dev_copy_2d, thread, block, stream, tile_src, tile_dst); break;
+		case 3: Ctrl_LaunchToStream(comm, epsilod_dev_copy_3d, thread, block, stream, tile_src, tile_dst); break;
+		case 4: Ctrl_LaunchToStream(comm, epsilod_dev_copy_4d, thread, block, stream, tile_src, tile_dst); break;
+		default:
+			fprintf(stderr, "\nError: Kernel tile transfer not implemented for more than %d dimensions.\n\n", 4);
+			MPI_Abort(MPI_COMM_WORLD, MPI_ERR_OTHER);
+			exit(EXIT_FAILURE);
+			break;
+	}
+}
+
+/**
+ * @brief
+ * @param comm Controller object
+ * @param tiles Tiles to communicate
+ * @param threads Thread spaces for kernels
+ * @param chars Blocksizes for kernels
+ */
+void unmarshall_halos(PCtrl comm, EpsilodTiles *tiles, EpsilodThreads threads, EpsilodThreads chars) {
+	int dims        = hit_tileDims(tiles->mat);
+	int num_borders = epsilod_num_borders(dims);
+
+	for (int i = 0; i < num_borders; i++) {
+		if (hit_tileIsNull(tiles->cont_border_in[i]))
+			continue;
+		int stream = i % get_ctrl_info()->n_kernel_queues;
+		transfer_tile(comm, tiles->cont_border_in[i], tiles->border_in[i], threads.cont_border_in[i], chars.cont_border_in[i], stream);
+	}
+	for (int i = 0; i < num_borders; i++) {
+		// Skip empty borders
+		if (hit_tileIsNull(tiles->border_in[i]))
+			continue;
+		Ctrl_WaitTile(comm, tiles->border_in[i]);
+	}
+}
 
 /**
  * @brief Perform communications.
@@ -248,22 +349,37 @@ CommsInnerFunction do_comms_inner;
  * @param comm Controller object
  * @param tiles Tiles to communicate
  * @param args Arguments for communications
+ * @param threads Thread spaces for kernels
+ * @param chars Blocksizes for kernels
  */
-void do_comms_host(PCtrl comm, EpsilodTiles *tiles, EpsilodCommArgs *args) {
+void do_comms_host(PCtrl comm, EpsilodTiles *tiles, EpsilodCommArgs *args, EpsilodThreads threads, EpsilodThreads chars) {
 	int dims        = hit_tileDims(tiles->mat);
 	int num_borders = epsilod_num_borders(dims);
 
-	for (int i = 0; i < dims; i++) {
-		for (int j = 0; j < 2; j++) {
-			if (validShape(tiles->border_out_dev[i][j].shape)) {
-				Ctrl_MoveFrom(comm, tiles->border_out_dev[i][j]);
+	if (comms_contiguous_buffers()) {
+		for (int i = 0; i < num_borders; i++) {
+			if (hit_tileIsNull(tiles->cont_border_out[i]))
+				continue;
+			Ctrl_MoveFrom(comm, tiles->cont_border_out[i]);
+		}
+		for (int i = 0; i < num_borders; i++) {
+			if (hit_tileIsNull(tiles->cont_border_out[i]))
+				continue;
+			Ctrl_WaitTile(comm, tiles->cont_border_out[i]);
+		}
+	} else {
+		for (int i = 0; i < dims; i++) {
+			for (int j = 0; j < 2; j++) {
+				if (validShape(tiles->border_out_dev[i][j].shape)) {
+					Ctrl_MoveFrom(comm, tiles->border_out_dev[i][j]);
+				}
 			}
 		}
-	}
-	for (int i = 0; i < dims; i++) {
-		for (int j = 0; j < 2; j++) {
-			if (validShape(tiles->border_out_dev[i][j].shape)) {
-				Ctrl_WaitTile(comm, tiles->border_out_dev[i][j]);
+		for (int i = 0; i < dims; i++) {
+			for (int j = 0; j < 2; j++) {
+				if (validShape(tiles->border_out_dev[i][j].shape)) {
+					Ctrl_WaitTile(comm, tiles->border_out_dev[i][j]);
+				}
 			}
 		}
 	}
@@ -272,8 +388,12 @@ void do_comms_host(PCtrl comm, EpsilodTiles *tiles, EpsilodCommArgs *args) {
 	do_comms_inner(comm, tiles, args);
 	for (int i = 0; i < num_borders; i++) {
 		// Skip empty borders
-		if (!args->border_in_active[i]) continue;
-		Ctrl_WaitTile(comm, tiles->border_in[i]);
+		if (!args->border_in_active[i])
+			continue;
+		Ctrl_WaitTile(comm, tiles->comms_border_in[i]);
+	}
+	if (comms_contiguous_buffers()) {
+		unmarshall_halos(comm, tiles, threads, chars);
 	}
 
 	hit_clockStop(commClock);
@@ -290,13 +410,12 @@ static inline void do_comms_host_inner_commany(PCtrl comm, EpsilodTiles *tiles, 
 		 endComm = hit_patternStepAsync(tiles->neighSync)) {
 
 		// Skip sends
-		if (endComm % 2 == 0) continue;
+		if (endComm % 2 == 0)
+			continue;
 
 		// Start move-to for recv
 		int border = args->index_comm_border[endComm / 2];
-
-		Ctrl_HostTask(epsilod_host_touch, tiles->border_in[border]);
-		Ctrl_MoveTo(comm, tiles->border_in[border]);
+		Ctrl_MoveTo(comm, tiles->comms_border_in[border]);
 	}
 }
 
@@ -313,9 +432,7 @@ static inline void do_comms_host_inner_commanyrecvfirst(PCtrl comm, EpsilodTiles
 
 		// Start move-to for recv
 		int border = args->index_comm_border[endComm];
-
-		Ctrl_HostTask(epsilod_host_touch, tiles->border_in[border]);
-		Ctrl_MoveTo(comm, tiles->border_in[border]);
+		Ctrl_MoveTo(comm, tiles->comms_border_in[border]);
 	}
 	hit_patternEndAsync(tiles->neighSync);
 }
@@ -331,9 +448,9 @@ static inline void do_comms_host_inner_commall(PCtrl comm, EpsilodTiles *tiles, 
 	int num_borders = epsilod_num_borders(dims);
 	for (int i = 0; i < num_borders; i++) {
 		// Skip empty borders
-		if (!args->border_in_active[i]) continue;
-		Ctrl_HostTask(epsilod_host_touch, tiles->border_in[i]);
-		Ctrl_MoveTo(comm, tiles->border_in[i]);
+		if (!args->border_in_active[i])
+			continue;
+		Ctrl_MoveTo(comm, tiles->comms_border_in[i]);
 	}
 }
 
@@ -342,33 +459,15 @@ static inline void do_comms_host_inner_commall(PCtrl comm, EpsilodTiles *tiles, 
  * @param comm Controller object
  * @param tiles Tiles to communicate
  * @param args Arguments for communications
+ * @param threads Thread spaces for kernels
+ * @param chars Blocksizes for kernels
  */
-void do_comms_device(PCtrl comm, EpsilodTiles *tiles, EpsilodCommArgs *args) {
+void do_comms_device(PCtrl comm, EpsilodTiles *tiles, EpsilodCommArgs *args, EpsilodThreads threads, EpsilodThreads chars) {
 	hit_patternDo((tiles->neighSync));
-}
 
-/**
- * @brief Get the communication method to be used.
- * This method can be specified by the EPSILOD_COMM_METHOD enviroment variable.
- * Defaults to \e HOST_WAITANY
- * @return communication method
- */
-EpsilodCommMethod epsilod_comm_method() {
-	static int val = -1;
-	if (val != -1)
-		return val;
-
-	const char *options[] = {"host_waitany", "host_waitany_recvfirst", "host_waitall"};
-	val                   = hit_envOptions("EPSILOD_COMM_METHOD", options);
-	switch (val) {
-		case 0:
-			val = HOST_WAITANY;
-		case 1:
-			val = HOST_WAITANY_RECVFIRST;
-		case 2:
-			val = HOST_WAITALL;
+	if (comms_contiguous_buffers()) {
+		unmarshall_halos(comm, tiles, threads, chars);
 	}
-	return val;
 }
 
 /**
@@ -433,9 +532,24 @@ void compute(PCtrl comm, stencilDeviceFunction f_updateCell,
 		}
 	}
 
+	if (comms_contiguous_buffers()) {
+		int num_borders = epsilod_num_borders(dims);
+		for (int i = 0; i < num_borders; i++) {
+			if (hit_tileIsNull(tiles.cont_border_out[i]))
+				continue;
+			int stream = i % get_ctrl_info()->n_kernel_queues;
+			transfer_tile(comm, tiles.border_out[i], tiles.cont_border_out[i], threads.cont_border_out[i], chars.cont_border_out[i], stream);
+		}
+		for (int i = 0; i < num_borders; i++) {
+			if (hit_tileIsNull(tiles.cont_border_out[i]))
+				continue;
+			Ctrl_WaitTile(comm, tiles.cont_border_out[i]);
+		}
+	}
+
 	// Compute inner
 	if (validShape(tiles.inner.shape) && validShape(tiles_copy.inner.shape)) {
-		f_updateCell(comm, threads.inner, chars.inner, 0, tiles.inner, tiles_copy.inner, coords.inner, stencil, factor, ext_params);
+		f_updateCell(comm, threads.inner, chars.inner, 0, tiles.inner_compute, tiles_copy.inner_compute, coords.inner, stencil, factor, ext_params);
 	}
 }
 
@@ -452,81 +566,6 @@ HitTile(EPSILOD_BASE_TYPE) create_global_mat(int dims, HitInd sizes[dims]) {
 		hit_shapeSig(shp, i) = hit_sig(0, sizes[i] - 1, 1);
 	}
 	return Ctrl_Domain(EPSILOD_BASE_TYPE, shp);
-}
-
-/**
- * @brief Prints controllers information on main process
- */
-void print_ctrl_info() {
-	size_t      stdout_buffer_size = 100 * 1024;
-	char        stdout_buffer[stdout_buffer_size];
-	char       *p_stdout_buffer = stdout_buffer;
-	const char *sep             = epsilod_exp_mode() ? "&" : "\n\n";
-	if (!epsilod_exp_mode())
-		p_stdout_buffer += sprintf(p_stdout_buffer, "MPI_Rank[%d]", hit_Rank);
-	p_stdout_buffer += Ctrl_SPrintInfo(p_stdout_buffer, epsilod_exp_mode());
-	print_gather(stdout_buffer, stdout_buffer_size, sep);
-	fflush(stdout);
-}
-
-/**
- * @brief Debug topology information dump
- * @param topo Topology
- */
-void print_topo_info(HitTopology topo) {
-	#ifdef _EPSILOD_TOPO_INFO_
-	if (hit_Rank == 0) {
-		char  buffer[1024];
-		char *p_buffer = buffer;
-		p_buffer += sprintf(p_buffer, "\nTOPOLOGY: ");
-		for (int i = 0; i < hit_topDims(topo); i++) {
-			p_buffer += sprintf(p_buffer, "%dx", hit_topDimCard(topo, i));
-		}
-		p_buffer--;
-		p_buffer += sprintf(p_buffer, "\n");
-		printf("%s", buffer);
-		fflush(stdout);
-	}
-	#endif // _EPSILOD_TOPO_INFO_
-}
-
-/**
- * @brief Debug layout information dump
- * @param lay Layout
- */
-void print_lay_info(HitLayout lay) {
-	#ifdef _EPSILOD_LAY_INFO_
-	size_t buff_sz  = 100 * 1024;
-	char  *buffer   = (char *)malloc(buff_sz * sizeof(char));
-	char  *p_buffer = buffer;
-
-	p_buffer += sprintf(p_buffer, "[%d] lay->orig: ", hit_Rank);
-	p_buffer += shape_to_str(p_buffer, lay.origShape);
-	p_buffer += sprintf(p_buffer, "\n");
-
-	p_buffer += sprintf(p_buffer, "[%d] lay->shape: ", hit_Rank);
-	p_buffer += shape_to_str(p_buffer, lay.shape);
-	p_buffer += sprintf(p_buffer, "\n");
-
-	print_gather(buffer, buff_sz, "\n");
-	free(buffer);
-	#endif // _EPSILOD_LAY_INFO_
-}
-
-/**
- * @brief Debug weight information dump
- * @param weights Weights
- */
-void print_weight_info(HitWeights weights) {
-	#ifdef _EPSILOD_WEIGHTS_INFO_
-	if (hit_Rank == 0) {
-		printf("\nPartition weights = {");
-		for (int i = 0; i < weights.num_procs; i++)
-			printf(" %f,", weights.ratios[i]);
-		printf("\b }\n");
-		fflush(stdout);
-	}
-	#endif // _EPSILOD_WEIGHTS_INFO_
 }
 
 /**
@@ -604,7 +643,7 @@ HitLayout get_layout(HitShape shp_global, EpsilodBorders borders) {
 			break;
 		case EPSILOD_PARTITION_WEIGHTED:
 			// Weighted distribution
-			lay = hit_layout_freeTopo(plug_layDimWeighted_Blocks, topo, shp_inner, info.dim, Ctrl_ConfigWeights());
+			lay = hit_layout_freeTopo(plug_layDimWeighted_Blocks, topo, shp_inner, info.dim, Ctrl_GetWeights());
 			break;
 		case EPSILOD_PARTITION_SINGLE_DIM:
 			// Regular distribution on a dimension
@@ -616,10 +655,6 @@ HitLayout get_layout(HitShape shp_global, EpsilodBorders borders) {
 			exit(EXIT_FAILURE);
 			break;
 	}
-
-	print_weight_info(Ctrl_ConfigWeights());
-
-	print_lay_info(lay);
 
 	// TODO @seralpa can this be done by innactive processes too?
 	if (hit_layImActive(lay)) check_partition_data(lay, borders);
@@ -661,6 +696,9 @@ void stencilComputation(
 	HitClock comp_clock;
 	hit_clockStart(comp_clock);
 
+	// Load EPSILOD's environment
+	epsilod_env_load();
+
 	int dims = hit_shapeDims(stencilShape);
 
 	// Check if generic kernel has been chosen
@@ -695,6 +733,7 @@ void stencilComputation(
 		hit_clockStart(init_clock);
 
 		PCtrl comm = Ctrl_Get(0);
+		get_ctrl_info();
 
 		print_ctrl_info();
 
@@ -717,6 +756,9 @@ void stencilComputation(
 
 		/* 3.2. Build distributed shape */
 		HitLayout lay = get_layout(globalMat.shape, borders);
+
+		print_weight_info(Ctrl_GetWeights());
+		print_lay_info(lay);
 
 		/* 4. Active processes */
 		if (hit_layImActive(lay)) {
@@ -741,10 +783,6 @@ void stencilComputation(
 			EpsilodTiles *p_tiles      = create_tiles(comm, lay, &globalMat, borders, comm_args);
 			EpsilodTiles *p_tiles_copy = create_tiles(comm, lay, &globalMat, borders, comm_args);
 
-			// Display extra tile info for debug
-			if (epsilod_debug_tiles())
-				dump_tiles(p_tiles);
-
 			/* 4.6. Build distributed-memory communication pattern */
 			CommCompIndex sorted_comm_indexes[num_borders];
 			sort_comm_indexes(*p_tiles, sorted_comm_indexes);
@@ -752,17 +790,41 @@ void stencilComputation(
 			p_tiles_copy->neighSync = create_comm_pattern(comm, p_tiles_copy, comm_args, sorted_comm_indexes, lay, HIT_CELL);
 
 			// Kernel characterizations and thread spaces
-			EpsilodThreads chars   = get_chars(dims, comm->type);
+			EpsilodThreads chars   = get_chars(dims, comm->type, *p_tiles);
 			EpsilodThreads threads = get_threads(*p_tiles);
-
-			/* 4.8. Initialize array */
-			print_once("Init stage...\n");
-			fflush(stdout);
 
 			EpsilodGlobalCoords coords = get_global_coords(*p_tiles, borders);
 
 			// External/extra parameters
 			Epsilod_ext *ext_params = (ext_params_arg == NULL) ? &(Epsilod_ext){0} : ext_params_arg;
+
+			// Logging
+			if (epsilod_log_tiles())
+				log_tiles(lay, p_tiles);
+			if (epsilod_log_threads()) {
+				log_threads(lay, "Threads:\n", threads, p_tiles);
+				log_threads(lay, "Chars:\n", chars, p_tiles);
+			}
+
+			// Communications warm-up
+			if (epsilod_warmup()) {
+				markTiles(comm, threads.touch, chars.touch, p_tiles, p_tiles_copy, &comm_args);
+				const int WARMUP_ITERS = 4;
+				print_once("Warm-up...\n");
+				for (int iter = 0; iter < WARMUP_ITERS; iter++) {
+					swap(p_tiles, p_tiles_copy, EpsilodTiles *);
+					compute(comm, f_updateCell, *p_tiles, *p_tiles_copy, threads, chars, coords, stencil, factor, ext_params);
+					do_comms(comm, p_tiles, &comm_args, threads, chars);
+					Ctrl_WaitTile(comm, p_tiles->inner_compute);
+				}
+			}
+
+			/* 4.8. Initialize array */
+			print_once("Init stage...\n");
+			fflush(stdout);
+
+			if (epsilod_read_input() != EPSILOD_FILE_NONE)
+				f_init = epsilod_read_input_default;
 
 			/* 4.8.1. First stage (Optional): initialization in host */
 			if (f_init != NULL) {
@@ -775,10 +837,18 @@ void stencilComputation(
 			}
 
 			/* 4.8.2. Second stage (Optional): initialization in device */
-			if (f_dev_init != NULL) {
+			if (f_dev_init != NULL && epsilod_read_input() == EPSILOD_FILE_NONE) {
 				print_once("\tInitializing in the device...\n");
 				fflush(stdout);
 				f_dev_init(comm, threads.mat, chars.mat, 0, p_tiles->mat, coords.mat, ext_params);
+				if (epsilod_write_input() != EPSILOD_FILE_NONE) {
+					Ctrl_MoveFrom(comm, p_tiles->mat);
+					Ctrl_WaitTile(comm, p_tiles->mat);
+				}
+			}
+
+			if (epsilod_write_input() != EPSILOD_FILE_NONE) {
+				epsilod_write_input_default(p_tiles->mat, coords.mat, ext_params);
 			}
 
 			/* 4.8.3. Initialize copy */
@@ -800,15 +870,17 @@ void stencilComputation(
 				fflush(stdout);
 				Ctrl_Launch(comm, epsilod_dev_touch, threads.touch, chars.touch, p_tiles->mat);
 				// This is limited by Controllers kernel thread id type, not by Ctrl_Thread
-				if (p_tiles->mat.acumCard <= INT_MAX) {
+				// Cannot perform a 1D copy when the tile is memory aligned
+				if (p_tiles->mat.acumCard <= INT_MAX && (epsilod_align() == EPSILOD_MEM_ALIGN_NONE || dims == 1)) {
 					Ctrl_Launch(comm, epsilod_dev_copy_1d, threads.flat, chars.flat, p_tiles->mat, p_tiles_copy->mat);
 				} else {
 					switch (dims) {
 						case 1: Ctrl_Launch(comm, epsilod_dev_copy_1d, threads.mat, chars.mat, p_tiles->mat, p_tiles_copy->mat); break;
 						case 2: Ctrl_Launch(comm, epsilod_dev_copy_2d, threads.mat, chars.mat, p_tiles->mat, p_tiles_copy->mat); break;
 						case 3: Ctrl_Launch(comm, epsilod_dev_copy_3d, threads.mat, chars.mat, p_tiles->mat, p_tiles_copy->mat); break;
+						case 4: Ctrl_Launch(comm, epsilod_dev_copy_4d, threads.mat, chars.mat, p_tiles->mat, p_tiles_copy->mat); break;
 						default:
-							fprintf(stderr, "\nError: Matrix copy not implemented for more than 3 dimensions when total cardinality is greater than UINT_MAX.\n\n");
+							fprintf(stderr, "\nError: Matrix copy: unexpected number of dimensions (%d, max. %d).\n\n", dims, EPSILOD_MAX_DIMS);
 							MPI_Abort(MPI_COMM_WORLD, MPI_ERR_OTHER);
 							exit(EXIT_FAILURE);
 							break;
@@ -821,7 +893,7 @@ void stencilComputation(
 				markTiles(comm, threads.touch, chars.touch, p_tiles, p_tiles_copy, &comm_args);
 				swap(p_tiles, p_tiles_copy, EpsilodTiles *);
 				compute(comm, f_init_copy, *p_tiles, *p_tiles_copy, threads, chars, coords, stencil, factor, ext_params);
-				do_comms(comm, p_tiles, &comm_args);
+				do_comms(comm, p_tiles, &comm_args, threads, chars);
 				swap(p_tiles, p_tiles_copy, EpsilodTiles *);
 			}
 
@@ -844,9 +916,9 @@ void stencilComputation(
 
 				swap(p_tiles, p_tiles_copy, EpsilodTiles *);
 				compute(comm, f_updateCell, *p_tiles, *p_tiles_copy, threads, chars, coords, stencil, factor, ext_params);
-				do_comms(comm, p_tiles, &comm_args);
+				do_comms(comm, p_tiles, &comm_args, threads, chars);
 
-				double k_time = Ctrl_TimeLastOp(comm, p_tiles->inner);
+				double k_time = Ctrl_TimeLastOp(comm, p_tiles->inner_compute);
 				hit_clockStart(redistribute_clock);
 				bool is_ALB = EPSILOD_ALB(comm, &p_tiles, &p_tiles_copy, &coords, comm_args, &lay, &threads, stencil, HIT_CELL, k_time, (iter == (numIterations - 2)));
 				// TODO move this inside EPSILOD_ALB to avoid checking if ALB was performed outside (requires kernel access from ALB)
@@ -869,10 +941,10 @@ void stencilComputation(
 				compute(comm, f_updateCell, *p_tiles, *p_tiles_copy, threads, chars, coords, stencil, factor, ext_params);
 
 				#ifdef _EPS_ALB_EXP_MODE_
-				double k_time = Ctrl_TimeLastOp(comm, p_tiles->inner);
+				double k_time = Ctrl_TimeLastOp(comm, p_tiles->inner_compute);
 				expALB_print("&0& %d,%d,%lf,%lf,%lf,%d\n", hit_Rank, numIterations - 1, iter_clock.seconds, redistribute_clock.seconds, k_time, 0);
 				#else //!_EPS_ALB_EXP_MODE_
-				Ctrl_WaitTile(comm, p_tiles->inner);
+				Ctrl_WaitTile(comm, p_tiles->inner_compute);
 				#endif //_EPS_ALB_EXP_MODE_
 			}
 
@@ -901,7 +973,10 @@ void stencilComputation(
 			#endif //_EPS_ALB_EXP_MODE_
 
 			/* 4.12. Write result matrix */
-			f_output(p_tiles->io, ext_params);
+			if (epsilod_write_output() != EPSILOD_FILE_NONE)
+				f_output = epsilod_write_output_default;
+			if (f_output != NULL)
+				f_output(p_tiles->io, ext_params);
 
 			print_once("Output finished\n");
 			fflush(stdout);
@@ -909,8 +984,8 @@ void stencilComputation(
 			// Free tiles
 			print_once("Freeing tiles...\n");
 			fflush(stdout);
-			freeEpsilodTiles(p_tiles);
-			freeEpsilodTiles(p_tiles_copy);
+			free_epsilod_tiles(p_tiles);
+			free_epsilod_tiles(p_tiles_copy);
 		} else {
 			/* 5. Inactive processes: only collective clock operations */
 			fprintf(stderr, "[%d] Warning, process not active\n", hit_Rank);

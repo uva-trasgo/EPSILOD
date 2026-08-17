@@ -98,5 +98,10 @@ CTRL_KERNEL(epsilod_dev_copy_3d, GENERIC, DEFAULT, KHitTileR(EPSILOD_BASE_TYPE) 
 	hit(matrix_out, thr_i, thr_j, thr_k) = hit(matrix, thr_i, thr_j, thr_k);
 });
 
+CTRL_KERNEL(epsilod_dev_copy_4d, GENERIC, DEFAULT, KHitTileR(EPSILOD_BASE_TYPE) matrix, const KHitTileR(EPSILOD_BASE_TYPE) matrix_out, {
+	for (int h = 0; h < hit_tileDimCard(matrix, 0); h++)
+		hit(matrix_out, h, thr_i, thr_j, thr_k) = hit(matrix, h, thr_i, thr_j, thr_k);
+});
+
 /* Empty kernel: to signal subselection and root tiles as modified to track dependencies */
 CTRL_KERNEL(epsilod_dev_touch, GENERIC, DEFAULT, KHitTileR(EPSILOD_BASE_TYPE) matrix, { ; });

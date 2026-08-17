@@ -11,15 +11,9 @@
 #define BOLD_TEXT    "\e[1m"
 #define REGULAR_TEXT "\e[m"
 
-// Global variables for input/ouput file options
-int io_read_input   = 0;
-int io_write_input  = 0;
-int io_write_output = 0;
-
 /* A. Protoypes */
 /* A.1. Array init and output functions */
 void initData(HitTile_float io_tile, EpsilodCoords global, Epsilod_ext *ext_params);
-void outputData(HitTile_float io_tile, Epsilod_ext *ext_params);
 
 /* A.2. Initialization functions */
 void initData1D(HitTile_float tileMat, EpsilodCoords global);
@@ -29,35 +23,25 @@ void initData4D(HitTile_float tileMat, EpsilodCoords global);
 
 /* B. Initialize arrays */
 void initData(HitTile_float io_tile, EpsilodCoords global, Epsilod_ext *ext_params) {
-	if (io_read_input) {
-		// Optional: reading the input matrix from a file
-		hit_tileFileReadOptions(&io_tile, "Matrix.in", NULL, HIT_FILE_RUNTIME, HIT_FILE_RUNTIME, io_read_input - 1, HIT_FILE_RUNTIME, HIT_FILE_FLOAT, HIT_FILE_RUNTIME, HIT_FILE_RUNTIME);
-	} else {
-		HitTile_float tileMat = *(HitTile_float *)hit_tileMemoryAncestor(&io_tile);
+	HitTile_float tileMat = *(HitTile_float *)hit_tileMemoryAncestor(&io_tile);
 
-		char *omp_env     = getenv("OMP_NUM_THREADS");
-		int   omp_threads = (omp_env != NULL) ? atoi(omp_env) : 1;
-		#pragma omp parallel for num_threads(omp_threads)
-		for (int i = 0; i < tileMat.acumCard; i++) {
-			hit(tileMat, i) = 0;
-		}
-
-		// Init borders
-		switch (global.dims) {
-			case 1: initData1D(tileMat, global); break;
-			case 2: initData2D(tileMat, global); break;
-			case 3: initData3D(tileMat, global); break;
-			case 4: initData4D(tileMat, global); break;
-			default:
-				fprintf(stderr, "Error: This init function only works for up to 4 dimensions\n");
-				MPI_Abort(MPI_COMM_WORLD, MPI_ERR_OTHER);
-				exit(EXIT_FAILURE);
-		}
+	char *omp_env     = getenv("OMP_NUM_THREADS");
+	int   omp_threads = (omp_env != NULL) ? atoi(omp_env) : 1;
+	#pragma omp parallel for num_threads(omp_threads)
+	for (int i = 0; i < tileMat.acumCard; i++) {
+		hit(tileMat, i) = 0;
 	}
 
-	if (io_write_input) {
-		// Write mat to a file (debugging)
-		hit_tileFileWriteOptions(&io_tile, "Matrix.copy", NULL, HIT_FILE_RUNTIME, HIT_FILE_RUNTIME, io_write_input - 1, HIT_FILE_RUNTIME, HIT_FILE_FLOAT, HIT_FILE_RUNTIME, HIT_FILE_RUNTIME);
+	// Init borders
+	switch (global.dims) {
+		case 1: initData1D(tileMat, global); break;
+		case 2: initData2D(tileMat, global); break;
+		case 3: initData3D(tileMat, global); break;
+		case 4: initData4D(tileMat, global); break;
+		default:
+			fprintf(stderr, "Error: This init function only works for up to 4 dimensions\n");
+			MPI_Abort(MPI_COMM_WORLD, MPI_ERR_OTHER);
+			exit(EXIT_FAILURE);
 	}
 }
 
@@ -250,13 +234,6 @@ void initData4D(HitTile_float tileMat, EpsilodCoords global) {
 						hit(tileMat, hit_tileDimCard(tileMat, 0) - 1 - i, j, k, l) = 2;
 }
 
-/* C. Write results */
-void outputData(HitTile_float io_tile, Epsilod_ext *ext_params) {
-	if (io_write_output) {
-		hit_tileFileWriteOptions(&io_tile, "Matrix.out", NULL, HIT_FILE_RUNTIME, HIT_FILE_RUNTIME, io_write_output - 1, HIT_FILE_RUNTIME, HIT_FILE_FLOAT, HIT_FILE_RUNTIME, HIT_FILE_RUNTIME);
-	}
-}
-
 /* D. Declarations of optimized stencil kernels:
  * see basic_stencils_kernels.c
  */
@@ -366,9 +343,9 @@ void print_usage(char *argv[]) {
 		fprintf(stderr, " to use the generic stencil kernel for any shape,\n");
 		fprintf(stderr, "\t      instead of a shape-specific optimized one. E.g.: _2d4\n");
 		fprintf(stderr, "\nEnvironment variables:\n");
-		fprintf(stderr, "\tTEST_EPSILOD_READ_INPUT=none|array|tile Read input from file Matrix.in\n");
-		fprintf(stderr, "\tTEST_EPSILOD_WRITE_OUTPUT=none|array|tile Write output to file Matrix.out\n");
-		fprintf(stderr, "\tTEST_EPSILOD_WRITE_INPUT=none|array|tile Wite input to file Matrix.copy\n");
+		fprintf(stderr, "\tEPSILOD_READ_INPUT=none|array|tile Read input from file Matrix.in\n");
+		fprintf(stderr, "\tEPSILOD_WRITE_OUTPUT=none|array|tile Write output to file Matrix.out\n");
+		fprintf(stderr, "\tEPSILOD_WRITE_INPUT=none|array|tile Wite input to file Matrix.copy\n");
 		epsilod_print_usage();
 		hit_filePrintUsage();
 		fprintf(stderr, "\n");
@@ -564,16 +541,8 @@ int main(int argc, char *argv[]) {
 	// Skip specific kernel when the user requests the use of generic kernel
 	if (argv[1][0] == '_') f_stencil = NULL;
 
-	// Read env variables
-	const char *io_options[] = {"none", "array", "tile", NULL};
-	io_read_input            = hit_envOptions("TEST_EPSILOD_READ_INPUT", io_options);
-	io_write_output          = hit_envOptions("TEST_EPSILOD_WRITE_OUTPUT", io_options);
-	io_write_input           = hit_envOptions("TEST_EPSILOD_WRITE_INPUT", io_options);
-
 	// Launch stencil computation
-	// TODO: allow loading from file
-	// stencilComputation(sizes, shpStencil, stencilData, factor, numIter, initData, NULL, NULL, f_stencil, outputData, NULL, device_selection_file);
-	stencilComputation(sizes, shpStencil, stencilData, factor, numIter, NULL, f_init, NULL, f_stencil, outputData, NULL, device_selection_file);
+	stencilComputation(sizes, shpStencil, stencilData, factor, numIter, NULL, f_init, NULL, f_stencil, NULL, NULL, device_selection_file);
 
 	Ctrl_Finalize();
 	return 0;

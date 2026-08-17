@@ -14,7 +14,7 @@
 #include "epsilod_kernels.h"
 
 /* KERNEL GENERIC: WAVESIM INIT */
-CTRL_KERNEL(initCell_wavesim, GENERIC, DEFAULT, KHitTile_float matrix, EpsilodCoords global_coords, Epsilod_ext ext_params, {
+EPSILOD_KERNEL(initCell_wavesim, GENERIC, DEFAULT, KHitTile_float matrix, EpsilodCoords global_coords, Epsilod_ext ext_params, {
 	int radius = 1;
 
 	const int y_g = thr_i + global_coords.offset[0] - radius;
@@ -29,7 +29,7 @@ CTRL_KERNEL(initCell_wavesim, GENERIC, DEFAULT, KHitTile_float matrix, EpsilodCo
 });
 
 /* KERNEL GENERIC: WAVESIM INIT COPY */
-CTRL_KERNEL(initCellCopy_wavesim, GENERIC, DEFAULT, KHitTile(EPSILOD_BASE_TYPE) matrix, const KHitTile(EPSILOD_BASE_TYPE) matrixCopy, EpsilodCoords global_coords, KHitTile_float stencil, float factor, const Epsilod_ext ext_params, {
+EPSILOD_KERNEL(initCellCopy_wavesim, GENERIC, DEFAULT, KHitTile(EPSILOD_BASE_TYPE) matrix, const KHitTile(EPSILOD_BASE_TYPE) matrixCopy, EpsilodCoords global_coords, KHitTile_float stencil, float factor, const Epsilod_ext ext_params, {
 	const int y = thr_i;
 	const int x = thr_j;
 
@@ -61,7 +61,7 @@ CTRL_KERNEL(initCellCopy_wavesim, GENERIC, DEFAULT, KHitTile(EPSILOD_BASE_TYPE) 
 });
 
 /* KERNEL GENERIC: WAVESIM */
-CTRL_KERNEL(updateCell_wavesim, GENERIC, DEFAULT, KHitTile(EPSILOD_BASE_TYPE) matrix, const KHitTile(EPSILOD_BASE_TYPE) matrixCopy, EpsilodCoords global_coords, KHitTile_float stencil, float factor, const Epsilod_ext ext_params, {
+EPSILOD_KERNEL(updateCell_wavesim, GENERIC, DEFAULT, KHitTile(EPSILOD_BASE_TYPE) matrix, const KHitTile(EPSILOD_BASE_TYPE) matrixCopy, EpsilodCoords global_coords, KHitTile_float stencil, float factor, const Epsilod_ext ext_params, {
 	const int y = thr_i;
 	const int x = thr_j;
 

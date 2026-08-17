@@ -9,14 +9,14 @@
 #ifndef _EPSILOD_EXT_TYPES_H_
 #define _EPSILOD_EXT_TYPES_H_
 
-#include "laplace_types.h"
-
 /* Default empty user type for extra parameters */
 #ifndef EPSILOD_USER_TYPES
 #define EPSILOD_USER_TYPES    \
 	typedef struct {          \
-		EPSILOD_BASE_TYPE dx; \
-		EPSILOD_BASE_TYPE dy; \
+		EPSILOD_BASE_TYPE r0; \
+		EPSILOD_BASE_TYPE r1; \
+		EPSILOD_BASE_TYPE r2; \
+		EPSILOD_BASE_TYPE r3; \
 	} Epsilod_ext;
 #endif
 

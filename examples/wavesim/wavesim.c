@@ -44,14 +44,6 @@ void initData(HitTile(EPSILOD_BASE_TYPE) tileMat, EpsilodCoords global_coords, E
 
 /* WRITE RESULTS */
 void outputData(HitTile_float io_tile, Epsilod_ext *ext_params) {
-	if (strcmp(output_file_name, "-") == 0) {
-		return;
-	}
-
-	char o_f_name[1024];
-	sprintf(o_f_name, "%s_%ld_%ld_%d", output_file_name, size.x, size.y, iterations);
-	output_file_name = o_f_name;
-
 	int radius = 1;
 
 	/* DATA PART */
@@ -71,9 +63,7 @@ void outputData(HitTile_float io_tile, Epsilod_ext *ext_params) {
 	HitTile(EPSILOD_BASE_TYPE) data;
 	hit_tileSelectArrayCoords(&data, &io_tile, shp_local_data);
 
-	/* Write distributed file */
-	// var, fileNamePrefix, fileNameSuffix, fileRank, format, coord, header, datatype, formatSize1, formatSize2
-	hit_tileFileWriteOptions(&data, output_file_name, NULL, HIT_FILE_RUNTIME, HIT_FILE_BINARY, HIT_FILE_ARRAY, HIT_FILE_NO_HEADER, HIT_FILE_TYPE_UNKNOWN, 1, 0);
+	epsilod_write_output_default(data, ext_params);
 }
 
 /* DECLARATIONS OF OPTIMIZED STENCIL KERNEL
@@ -97,7 +87,7 @@ int main(int argc, char *argv[]) {
 	Ctrl_Init(&argc, &argv);
 
 	/* Check program arguments number */
-	if (argc != 7) {
+	if (argc != 6) {
 		printUsage(argv);
 		exit(EXIT_FAILURE);
 	}
@@ -108,8 +98,7 @@ int main(int argc, char *argv[]) {
 	int   T                     = atoi(argv[3]);
 	float dt                    = atof(argv[4]);
 	iterations                  = T / dt;
-	output_file_name            = argv[5];
-	char *device_selection_file = argv[6];
+	char *device_selection_file = argv[5];
 
 	/* STENCIL DECLARATION */
 	/* RADIUS */

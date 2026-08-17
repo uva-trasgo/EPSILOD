@@ -7,6 +7,8 @@
  */
 
 #include "epsilod_alb.h"
+#include "epsilod_env.h"
+#include "epsilod_log.h"
 
 HitShape expandShapeBorders(HitTile *globalMat, HitInd *borderLow, HitInd *borderHigh, HitShape shape) {
 	int dims = hit_shapeDims(shape);
@@ -167,7 +169,7 @@ bool EPSILOD_ALB(PCtrl comm, EpsilodTiles **pp_tiles, EpsilodTiles **pp_tiles_co
 			HitTile(EPSILOD_BASE_TYPE) *globalMat = (HitTile(EPSILOD_BASE_TYPE) *)hit_tileRoot(&p_tiles->mat);
 
 			// Free old tilecopy
-			freeEpsilodTiles(*pp_tiles_copy);
+			free_epsilod_tiles(*pp_tiles_copy);
 
 			// Create new layout
 			HitLayout new_lay = hit_layout_freeTopo(plug_layDimWeighted_Blocks, hit_topology(plug_topPlain), p_lay->origShape, 0, weights);
@@ -207,7 +209,7 @@ bool EPSILOD_ALB(PCtrl comm, EpsilodTiles **pp_tiles, EpsilodTiles **pp_tiles_co
 			*p_lay = new_lay;
 
 			// Free old tiles
-			freeEpsilodTiles(p_tiles);
+			free_epsilod_tiles(p_tiles);
 
 			// Compute new tiles copy
 			EpsilodTiles *p_new_tiles_copy = create_tiles(comm, new_lay, globalMat, borders, comm_args);

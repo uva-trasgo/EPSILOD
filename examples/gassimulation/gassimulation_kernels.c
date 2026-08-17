@@ -13,7 +13,7 @@
 
 #include "epsilod_kernels.h"
 
-CTRL_KERNEL(initCell_gassimulation, GENERIC, DEFAULT, KHitTile_cell_t matrix, EpsilodCoords global_coords, Epsilod_ext ext_params, {
+EPSILOD_KERNEL(initCell_gassimulation, GENERIC, DEFAULT, KHitTile_cell_t matrix, EpsilodCoords global_coords, Epsilod_ext ext_params, {
 	cell_t c = ((cell_t){{0.}});
 	// printf("Thr: %d, %d, %d\n", thr_i, thr_j, thr_k );
 
@@ -82,7 +82,7 @@ CTRL_KERNEL(initCell_gassimulation, GENERIC, DEFAULT, KHitTile_cell_t matrix, Ep
 });
 
 /* KERNEL GENERIC: GAS SIMULATION */
-CTRL_KERNEL(updateCell_gassimulation, GENERIC, DEFAULT, KHitTile_cell_t matrix, const KHitTile_cell_t matrixCopy, EpsilodCoords global_coords, KHitTile_float stencil, float factor, const Epsilod_ext ext_params, {
+EPSILOD_KERNEL(updateCell_gassimulation, GENERIC, DEFAULT, KHitTile_cell_t matrix, const KHitTile_cell_t matrixCopy, EpsilodCoords global_coords, KHitTile_float stencil, float factor, const Epsilod_ext ext_params, {
 	int x = thr_i;
 	int y = thr_j;
 	int z = thr_k;

@@ -51,10 +51,15 @@ typedef void (*outputDataFunction)(HitTile(EPSILOD_BASE_TYPE), Epsilod_ext *);
 typedef struct EpsilodTiles {
 	HitTile(EPSILOD_BASE_TYPE) mat;                  /**< Encompasses the local region of the domain and the inbound halos */
 	HitTile(EPSILOD_BASE_TYPE) inner;                /**< Selection of mat spanning the inner region of the local domain */
+	HitTile(EPSILOD_BASE_TYPE) inner_compute;        /**< Selection of mat spanning the inner region of the local domain. Used in computation. It may be extended in the last dimensión to allow coalesced memory accesses */
 	HitTile(EPSILOD_BASE_TYPE) io;                   /**< Selection of mat used for input/output of the domain */
 	HitTile(EPSILOD_BASE_TYPE) * border_in;          /**< Selections of mat spanning the inbound halos. Size 3^dims */
 	HitTile(EPSILOD_BASE_TYPE) * border_out;         /**< Selections of mat spanning the outbound borders. Size 3^dims */
 	HitTile(EPSILOD_BASE_TYPE) (*border_out_dev)[2]; /**< Selections of mat spanning the outbound borders in the device. Size 2*dims */
+	HitTile(EPSILOD_BASE_TYPE) * cont_border_in;     /**< Buffer tiles for inbound halos to support memory access to contiguous regions. They contain allocated memory. Size 3^dims. */
+	HitTile(EPSILOD_BASE_TYPE) * cont_border_out;    /**< Buffer tiles for outbound borders to support memory access to contiguous regions. They contain allocated memory. Size 3^dims. */
+	HitTile(EPSILOD_BASE_TYPE) * comms_border_in;    /**< Communication tiles for inbound halos. Selections of buffer borders. Size 3^dims. */
+	HitTile(EPSILOD_BASE_TYPE) * comms_border_out;   /**< Communication tiles for outbound borders. Selections of buffer borders. Size 3^dims. */
 	HitPattern neighSync;                            /**< Communication pattern for this set of tiles */
 } EpsilodTiles;
 
@@ -62,11 +67,13 @@ typedef struct EpsilodTiles {
  * @brief Device thread spaces used in computation
  */
 typedef struct EpsilodThreads {
-	Ctrl_Thread mat;                                 /**< Thread space for the device allocated tile */
-	Ctrl_Thread inner;                               /**< Thread space for the inner tile selection */
-	Ctrl_Thread flat;                                /**< Flattened thread space for the device allocated tile */
-	Ctrl_Thread touch;                               /**< One-thread space used to avoid warnings */
-	Ctrl_Thread border_out_dev[EPSILOD_MAX_DIMS][2]; /**< Thread spaces for the outbound tile selections in the device */
+	Ctrl_Thread  mat;                                 /**< Thread space for the device allocated tile */
+	Ctrl_Thread  inner;                               /**< Thread space for the inner tile selection */
+	Ctrl_Thread  flat;                                /**< Flattened thread space for the device allocated tile */
+	Ctrl_Thread  touch;                               /**< One-thread space used to avoid warnings */
+	Ctrl_Thread  border_out_dev[EPSILOD_MAX_DIMS][2]; /**< Thread spaces for the outbound tile selections in the device */
+	Ctrl_Thread *cont_border_in;                      /**< Thread spaces for the inbound tiles. Used in marshall/unmarshall kernels. */
+	Ctrl_Thread *cont_border_out;                     /**< Thread spaces for the outbound tiles. Used in marshall/unmarshall kernels. */
 } EpsilodThreads;
 
 /**
@@ -119,11 +126,29 @@ typedef enum EpsilodCommMethod {
 } EpsilodCommMethod;
 
 /**
+ * EPSILOD memory alignment mode
+ */
+typedef enum EpsilodMemAlignMode {
+	EPSILOD_MEM_ALIGN_NONE,    /**< Epsilod's tile is not memory aligned */
+	EPSILOD_MEM_ALIGN,         /**< Epsilod's tile's last dimension is memory aligned. Alignment depends on the device backend or the device configuration file */
+	EPSILOD_MEM_ALIGN_THREADS, /**< Epsilod's tile's last dimension is memory aligned. In addition it attempts to align device threads to the memory region by extending the inner tile in the last dimension */
+} EpsilodMemAlignMode;
+
+/**
+ * EPSILOD IO file mode
+ */
+typedef enum IOTileMode {
+	EPSILOD_FILE_NONE,  /**< Data is not read/written from/to a file */
+	EPSILOD_FILE_ARRAY, /**< Data is read/written in Tile mode. @see HIT_FILE_ARRAY */
+	EPSILOD_FILE_TILE,  /**< Data is read/written in Array mode. @see HIT_FILE_TILE */
+} IOTileMode;
+
+/**
  * @brief Frees the space used by tile data
  * Frees the tiles, the lists of tiles in the structure (borders) and the structure itself
  * @param p_tiles Pointer to the tiles to free
  */
-void freeEpsilodTiles(EpsilodTiles *p_tiles);
+void free_epsilod_tiles(EpsilodTiles *p_tiles);
 
 /**
  * @brief A helper structure to compare border tiles.
@@ -156,32 +181,6 @@ typedef struct CommCompIndex {
 		a         = b;    \
 		b         = SWAP; \
 	} while (0)
-
-/* Color text modifiers shortcut */
-#define BOLD_TEXT    "\e[1m"
-#define REGULAR_TEXT "\e[m"
-
-/**
- * Print by all processes. Disabled if Epsilod's experimentation mode is active.
- * @param format pointer to a null-terminated byte string specifying how to interpret the data
- * @param ... arguments specifying data to print.
- */
-void print_all(const char *format, ...);
-
-/**
- * Print by rank 0. Disabled if Epsilod's experimentation mode is active.
- * @param format pointer to a null-terminated byte string specifying how to interpret the data
- * @param ... arguments specifying data to print.
- */
-void print_once(const char *format, ...);
-
-/**
- * @brief Gather the given string buffer by rank 0 and print the gathered strings
- * @param buffer String buffer.
- * @param buffer_size Buffer size.
- * @param separator A string separator between the gathered buffers.
- */
-void print_gather(char *buffer, size_t buffer_size, const char *separator);
 
 /**
  * @brief Sorts border tiles indexes used in communication patterns
@@ -224,27 +223,6 @@ EpsilodTiles *create_tiles(PCtrl comm, HitLayout lay, HitTile(EPSILOD_BASE_TYPE)
 HitPattern create_comm_pattern(PCtrl comm, EpsilodTiles *p_tiles, EpsilodCommArgs comm_args, CommCompIndex *sorted_comm_indexes, HitLayout lay, HitType HIT_CELL);
 
 /**
- * @brief Whether EPSILOD should use device-aware MPI for communications.
- * @return true if device-aware MPI should be used, false otherwise.
- */
-bool mpi_dev_aware();
-
-/**
- * @brief Whether EPSILOD should run in experimentation mode.
- * This affects the verbosity of output and its format.
- *
- * @return true if experimentation mode is active, false otherwise.
- */
-bool epsilod_exp_mode();
-
-/**
- * @brief Whether EPSILOD should print tile debug information.
- *
- * @return true if tile debug information is expected, false otherwise.
- */
-bool epsilod_debug_tiles();
-
-/**
  * @brief Generates data that allows calculating global coordinates for each local subselection.
  * @param tiles EPSILOD tiles structure containing the local subselections.
  * @param borders Border sizes.
@@ -275,45 +253,7 @@ EpsilodThreads get_threads(EpsilodTiles tiles);
  * @param ctrl_type EPSILOD controller type.
  * @return EPSILOD compute block sizes.
  */
-EpsilodThreads get_chars(int dims, Ctrl_Type ctrl_type);
-
-// TODO @davdiez move to hitmap and use in dumpShape
-/**
- * Get the string representation of a shape in the given buffer
- *
- * @param[out] buff The output buffer.
- * @param sh \e HitShape A HitShape.
- *
- * @return
- */
-int shape_to_str(char *buff, HitShape sh);
-
-/**
- * Get the string representation of a tile in the given buffer
- *
- * @param[out] buffer The output buffer.
- * @param p_tile A pointer to the tile.
- */
-int tile_to_str(char *buffer, HitTile(EPSILOD_BASE_TYPE) * p_tile);
-
-/**
- * @brief Prints information about local subselection tiles.
- * @param p_tiles Local subselection tiles.
- */
-void dump_tiles(EpsilodTiles *p_tiles);
-
-/**
- * @brief Prints information about the global coordinates of local subselection tiles.
- * @param g_coords Global coordinates data of local tiles.
- */
-void dump_global_coords(EpsilodGlobalCoords g_coords);
-
-/**
- * @brief Gets data necesary to perform the selected partition scheme on the global tile.
- * @param dims The number of dimensions of the domain.
- * @return Partition data.
- */
-PartitionInfo get_partition_info(int dims);
+EpsilodThreads get_chars(int dims, Ctrl_Type ctrl_type, EpsilodTiles tiles);
 
 #ifdef _EPS_ALB_EXP_MODE_
 /**

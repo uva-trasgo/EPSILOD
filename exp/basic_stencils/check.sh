@@ -63,13 +63,14 @@ function doTest() {
 	echo -e "\e[1mTest $5 $2 $3 $4:\e[0m"
 
 	# EXECUTE PROGRAM
-	rm -f $RESULT_FILE
 	dims=$(echo $5 | cut -c1)
 	for dim in $(seq 1 $dims); do
+		rm -f $RESULT_FILE
+
 		if [ "$dim" = "1" ]; then
 			partition="EPSILOD_PARTITION=w0 EPSILOD_ALB_HEUR=NextALB"
 		else
-			partition="EPSILOD_PARTITION=r$dim"
+			partition="EPSILOD_PARTITION=m$dim"
 		fi
 
 		export $partition
@@ -120,7 +121,7 @@ tar Jxf CorrectResults.tar.xz
 # SETUP ENV VARIABLES
 export HIT_FILE_HEADER=no
 export HIT_FILE_TEXT=yes
-export TEST_EPSILOD_WRITE_OUTPUT=array
+export EPSILOD_WRITE_OUTPUT=array
 export HIT_FILE_TXT_SIZE=42
 export HIT_FILE_TXT_DECIMALS=40
 export OMP_NUM_THREADS=24

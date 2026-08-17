@@ -118,7 +118,7 @@ tar Jxf CorrectResults.tar.xz
 # SETUP ENV VARIABLES
 export HIT_FILE_HEADER=no
 export HIT_FILE_TEXT=yes
-export TEST_EPSILOD_WRITE_OUTPUT=array
+export EPSILOD_WRITE_OUTPUT=array
 export HIT_FILE_TXT_SIZE=42
 export HIT_FILE_TXT_DECIMALS=40
 export OMP_NUM_THREADS=24

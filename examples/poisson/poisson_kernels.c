@@ -18,12 +18,12 @@
 #endif // EPSILOD_IS_FLOAT(EPSILOD_BASE_TYPE)
 
 /* KERNEL GENERIC: POISSON */
-CTRL_KERNEL(noop_poisson, GENERIC, DEFAULT, KHitTile(EPSILOD_BASE_TYPE) matrix, const KHitTile(EPSILOD_BASE_TYPE) matrixCopy, EpsilodCoords global_coords, KHitTile_float stencil, float factor, const Epsilod_ext ext_params, {
+EPSILOD_KERNEL(noop_poisson, GENERIC, DEFAULT, KHitTile(EPSILOD_BASE_TYPE) matrix, const KHitTile(EPSILOD_BASE_TYPE) matrixCopy, EpsilodCoords global_coords, KHitTile_float stencil, float factor, const Epsilod_ext ext_params, {
 	hit(matrix, thr_i, thr_j) = hit(matrixCopy, thr_i, thr_j);
 });
 
 /* KERNEL GENERIC: POISSON */
-CTRL_KERNEL(updateCell_poisson, GENERIC, DEFAULT, KHitTile(EPSILOD_BASE_TYPE) matrix, const KHitTile(EPSILOD_BASE_TYPE) matrixCopy, EpsilodCoords global_coords, KHitTile_float stencil, float factor, const Epsilod_ext ext_params, {
+EPSILOD_KERNEL(updateCell_poisson, GENERIC, DEFAULT, KHitTile(EPSILOD_BASE_TYPE) matrix, const KHitTile(EPSILOD_BASE_TYPE) matrixCopy, EpsilodCoords global_coords, KHitTile_float stencil, float factor, const Epsilod_ext ext_params, {
 	int x = thr_i;
 	int y = thr_j;
 

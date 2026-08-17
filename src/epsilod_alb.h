@@ -1,5 +1,3 @@
-#ifndef _EPSILOD_ALB_
-#define _EPSILOD_ALB_
 /**
  * @file epsilod_alb.h
  * @brief Prototypes for ALB functions and structs for ALB data types.
@@ -7,6 +5,9 @@
  * @copyright This software is part of the EPSILOD project by Trasgo Group, UVa.
  * The relevant license, warranty and copyright notice is available in the EPSILOD project repository.
  */
+
+#ifndef _EPSILOD_ALB_
+#define _EPSILOD_ALB_
 
 #include "hit_automatic_load_balancing/hit_alb.h"
 #include "epsilod_structs.h"

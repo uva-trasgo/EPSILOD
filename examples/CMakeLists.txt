@@ -35,6 +35,6 @@ add_epsilod_version(cell_t "${CMAKE_CURRENT_SOURCE_DIR}/gassimulation/gassimulat
 add_app(gassimulation cell_t "gassimulation_types.h" "")
 add_app(gaussian ${EXAMPLES_BASE_TYPE} "epsilod_types.h" "")
 add_app(poisson ${EXAMPLES_BASE_TYPE} "poisson_types.h" "")
-add_app(laplace ${EXAMPLES_BASE_TYPE} "laplace_types.h" "")
+add_app(laplace ${EXAMPLES_BASE_TYPE} "epsilod_types.h" "")
 add_app(wavesim ${EXAMPLES_BASE_TYPE} "wavesim_types.h" "")
 add_app(basic_stencils float "epsilod_types.h" "")

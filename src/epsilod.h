@@ -10,6 +10,7 @@
 #define _EPSILOD_H_
 
 #include "epsilod_structs.h"
+#include "epsilod_io.h"
 #include "epsilod_alb.h"
 #include "epsilod_alb_heuristics.h"
 
@@ -90,15 +91,22 @@ void stencilComputation(HitInd                 sizes[],
  * @param name Name of the Kernel for the stencil.
  * @param ... List of implementations available for the kernel. In the form: ARCH, SUBARCH.
  */
-#define REGISTER_STENCIL(name, ...)                                               \
-	REGISTER_STENCIL_N(name, CTRL_COUNTPARAM(__VA_ARGS__), __VA_ARGS__)           \
-	CTRL_KERNEL_CHAR(name, MANUAL, 64, 8, 1);                                     \
-	void name(PCtrl ctrl, Ctrl_Thread threads, Ctrl_Thread blockSize, int stream, \
-			  HitTile(EPSILOD_BASE_TYPE) mat, HitTile(EPSILOD_BASE_TYPE) copy,    \
-			  EpsilodCoords global, HitTile_float stencil, float factor,          \
-			  Epsilod_ext *ext_params) {                                          \
-		Ctrl_LaunchToStream(ctrl, name, threads, blockSize, stream, mat, copy,    \
-							global, stencil, factor, *ext_params);                \
+#define REGISTER_STENCIL(name, ...)                                                            \
+	REGISTER_STENCIL_N(name, CTRL_COUNTPARAM(__VA_ARGS__), __VA_ARGS__)                        \
+	REGISTER_STENCIL_N(name##_unaligned, CTRL_COUNTPARAM(__VA_ARGS__), __VA_ARGS__)            \
+	CTRL_KERNEL_CHAR(name, MANUAL, 64, 8, 1);                                                  \
+	CTRL_KERNEL_CHAR(name##_unaligned, MANUAL, 64, 8, 1);                                      \
+	void name(PCtrl ctrl, Ctrl_Thread threads, Ctrl_Thread blockSize, int stream,              \
+			  HitTile(EPSILOD_BASE_TYPE) mat, HitTile(EPSILOD_BASE_TYPE) copy,                 \
+			  EpsilodCoords global, HitTile_float stencil, float factor,                       \
+			  Epsilod_ext *ext_params) {                                                       \
+		if (global.inner_last_dim_offset != 0) {                                               \
+			Ctrl_LaunchToStream(ctrl, name, threads, blockSize, stream, mat, copy,             \
+								global, stencil, factor, *ext_params);                         \
+		} else {                                                                               \
+			Ctrl_LaunchToStream(ctrl, name##_unaligned, threads, blockSize, stream, mat, copy, \
+								global, stencil, factor, *ext_params);                         \
+		}                                                                                      \
 	}
 
 #define REGISTER_STENCIL_N(name, n_archs_times_2, ...)     REGISTER_STENCIL_N_EXP(name, n_archs_times_2, __VA_ARGS__)
@@ -157,8 +165,7 @@ void stencilComputation(HitInd                 sizes[],
 									  HitTile(EPSILOD_BASE_TYPE) mat, HitTile(EPSILOD_BASE_TYPE) copy, \
 									  EpsilodCoords global, HitTile_float stencil, float factor,       \
 									  Epsilod_ext *ext_params) {                                       \
-		Ctrl_Info info = Ctrl_GetInfo(ctrl);                                                           \
-		if (!strcmp(info.type, "FPGA")) {                                                              \
+		if (ctrl->type == CTRL_TYPE_FPGA) {                                                            \
 			int size[2] = {                                                                            \
 				hit_tileDimCard(mat, 0),                                                               \
 				hit_tileDimCard(mat, 1),                                                               \
@@ -182,9 +189,15 @@ void stencilComputation(HitInd                 sizes[],
 									mat, copy, global, stencil, factor, *ext_params);                  \
 			}                                                                                          \
 		} else {                                                                                       \
-			Ctrl_LaunchToStream(ctrl, default_kernel,                                                  \
-								threads, blockSize, stream, mat, copy,                                 \
-								global, stencil, factor, *ext_params);                                 \
+			if (global.inner_last_dim_offset != 0) {                                                   \
+				Ctrl_LaunchToStream(ctrl, default_kernel,                                              \
+									threads, blockSize, stream, mat, copy,                             \
+									global, stencil, factor, *ext_params);                             \
+			} else {                                                                                   \
+				Ctrl_LaunchToStream(ctrl, default_kernel##_unaligned,                                  \
+									threads, blockSize, stream, mat, copy,                             \
+									global, stencil, factor, *ext_params);                             \
+			}                                                                                          \
 		}                                                                                              \
 	}
 #define REGISTER_BORDER_DETECTOR_3D(default_kernel, yzBorder_kernel, xzBorder_kernel, xyBorder_kernel) \
@@ -193,8 +206,7 @@ void stencilComputation(HitInd                 sizes[],
 									  HitTile(EPSILOD_BASE_TYPE) mat, HitTile(EPSILOD_BASE_TYPE) copy, \
 									  EpsilodCoords global, HitTile_float stencil, float factor,       \
 									  Epsilod_ext *ext_params) {                                       \
-		Ctrl_Info info = Ctrl_GetInfo(ctrl);                                                           \
-		if (!strcmp(info.type, "FPGA")) {                                                              \
+		if (ctrl->type == CTRL_TYPE_FPGA) {                                                            \
 			int size[3] = {                                                                            \
 				hit_tileDimCard(mat, 0),                                                               \
 				hit_tileDimCard(mat, 1),                                                               \
@@ -228,9 +240,15 @@ void stencilComputation(HitInd                 sizes[],
 									global, stencil, factor, *ext_params);                             \
 			}                                                                                          \
 		} else {                                                                                       \
-			Ctrl_LaunchToStream(ctrl, default_kernel,                                                  \
-								threads, blockSize, stream, mat, copy,                                 \
-								global, stencil, factor, *ext_params);                                 \
+			if (global.inner_last_dim_offset != 0) {                                                   \
+				Ctrl_LaunchToStream(ctrl, default_kernel,                                              \
+									threads, blockSize, stream, mat, copy,                             \
+									global, stencil, factor, *ext_params);                             \
+			} else {                                                                                   \
+				Ctrl_LaunchToStream(ctrl, default_kernel##_unaligned,                                  \
+									threads, blockSize, stream, mat, copy,                             \
+									global, stencil, factor, *ext_params);                             \
+			}                                                                                          \
 		}                                                                                              \
 	}
 #define REGISTER_BORDER_DETECTOR_4D(default_kernel, yzwBorder_kernel, xzwBorder_kernel,                \
@@ -240,8 +258,7 @@ void stencilComputation(HitInd                 sizes[],
 									  HitTile(EPSILOD_BASE_TYPE) mat, HitTile(EPSILOD_BASE_TYPE) copy, \
 									  EpsilodCoords global, HitTile_float stencil, float factor,       \
 									  Epsilod_ext *ext_params) {                                       \
-		Ctrl_Info info = Ctrl_GetInfo(ctrl);                                                           \
-		if (!strcmp(info.type, "FPGA")) {                                                              \
+		if (ctrl->type == CTRL_TYPE_FPGA) {                                                            \
 			int size[4] = {                                                                            \
 				hit_tileDimCard(mat, 0),                                                               \
 				hit_tileDimCard(mat, 1),                                                               \
@@ -282,9 +299,15 @@ void stencilComputation(HitInd                 sizes[],
 									global, stencil, factor, *ext_params);                             \
 			}                                                                                          \
 		} else {                                                                                       \
-			Ctrl_LaunchToStream(ctrl, default_kernel,                                                  \
-								threads, blockSize, stream, mat, copy,                                 \
-								global, stencil, factor, *ext_params);                                 \
+			if (global.inner_last_dim_offset != 0) {                                                   \
+				Ctrl_LaunchToStream(ctrl, default_kernel,                                              \
+									threads, blockSize, stream, mat, copy,                             \
+									global, stencil, factor, *ext_params);                             \
+			} else {                                                                                   \
+				Ctrl_LaunchToStream(ctrl, default_kernel##_unaligned,                                  \
+									threads, blockSize, stream, mat, copy,                             \
+									global, stencil, factor, *ext_params);                             \
+			}                                                                                          \
 		}                                                                                              \
 	}
 
